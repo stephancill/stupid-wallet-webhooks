@@ -78,6 +78,12 @@ Milestone working notes for the EVM Address Notifications worker.
   account rejected a second distinct chain
   (`"quota": distinct chain quota exceeded`). Defaults (1,000 / 20) remain in
   effect for override-free accounts.
+- **Multi-chain delivery validated**: bridged a small amount of Base ETH to
+  Optimism and Arbitrum via **relay.link** (`scripts/bridge-relay.mts`), then
+  sent value transfers from the test wallet on all three chains. `activity.observed`
+  webhooks were delivered (HTTP 200) for **Base, Optimism, and Arbitrum** — 10
+  successful deliveries across the pilot webhook, all reproducible through the
+  delivery ledger. (relay deposit txs: `0xbe4b…9c` → OP, `0xd30b…ba9` → ARB.)
 
 ### Feedback from the live run
 
