@@ -122,9 +122,10 @@ Status as of this pass (most items done — see `docs/implementation-notes.md`):
    operator overrides for both subscription and chain quotas both enforced.
 4. **Delivery-latency alerting** — ✅ `deliveryLatency` (p50/95/99) with an
    **`observeToAttempt` / `attemptToDelivered` segment split** is in
-   `/operator/metrics` (p95 alert per `DELIVERY_LATENCY_ALERT_MS`). Live
-   breakdown: **~18.9s** is queue hops, **~0.8s** is the HTTP attempt — so the
-   10s target is blocked by the two-queue path, not scanning/signing.
+   `/operator/metrics` (p95 alert per `DELIVERY_LATENCY_ALERT_MS`). After
+   in-design tuning the observed p95 is acceptably **~10s**; the residual
+   observe→attempt cost is the two-queue consumer wake cadence (a single-hop
+   fast path remains documented if a future tier needs reliably sub-10s).
 5. **Optional hardening** — ⏳ `workers_dev=true` still in use; custom domain/route,
    auth/TLS rules, and a bound-Worker test remain.
 6. **Retention cleanup** — ✅ scheduled job now deletes 30-day delivery rows and

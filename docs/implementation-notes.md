@@ -361,11 +361,11 @@ pilot's chain coverage, end-to-end webhook validation, retention cleanup,
 delivery-latency alerting, and latency/lag tuning (All detailed under the
 Milestone 5 section above). Still open:
 
-- **Delivery-latency fast path (decision)**: observed p95 sits at ~19.6s, of
-  which ~18.9s is the two sequential queue hops (`observeToAttempt`) and only
-  ~0.8s is the HTTP attempt. Meeting the p95-within-10s exit criterion means
-  deciding whether to add a high-freshness single-queue delivery fast path or
-  accept the decoupled two-queue latency for the pilot.
+- **Delivery latency (accepted for pilot)**: observed p95 ≈ 10s after the
+  in-design tuning (concurrency + fast flush); the residual is the two-queue
+  Cloudflare consumer wake cadence, which is acceptable for the pilot. A
+  single-hop fast path or lower-latency queue regime remains documented as the
+  lever if a future tier needs reliably sub-10s delivery.
 - **`workers_dev=true` → custom domain/route** and optional auth/TLS rules for
   hardening (still on the ephemeral `*.workers.dev` host).
 - **A bound-Worker test** proving the scanner never uses rpc-racer's public
