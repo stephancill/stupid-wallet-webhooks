@@ -1,7 +1,9 @@
-import type { Env } from "./env";
+import type { Env, MatchedMessage, DeliveryHook } from "./env";
 import { createApp } from "./api/app";
 import { ScannerShard } from "./scanner/ScannerShard";
 import { redispatchPending } from "./scanner/outbox";
+import { fanoutMatched } from "./queues/fanout";
+import { deliverWebhooks } from "./queues/deliver";
 
 const app = createApp();
 
@@ -18,5 +20,15 @@ export default {
         await redispatchPending({ db: env.DB, env });
       })(),
     );
+  },
+
+  // Queue consumers (Milestone 3): fan matched activity out to subscriptions,
+  // then deliver signed webhooks per destination.
+  async queue(batch: MessageBatch<unknown>, env: Env): Promise<void> {
+    if (batch.queue === "matched-activity") {
+      await fanoutMatched(batch as unknown as MessageBatch<MatchedMessage>, env);
+    } else if (batch.queue === "webhook-delivery") {
+      await deliverWebhooks(batch as unknown as MessageBatch<DeliveryHook>, env);
+    }
   },
 };

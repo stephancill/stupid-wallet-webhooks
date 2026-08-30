@@ -26,6 +26,23 @@ new_sqlite_classes = ["ScannerShard"]
 binding = "MATCHED_ACTIVITY_QUEUE"
 queue = "matched-activity"
 
+[[queues.producers]]
+binding = "WEBHOOK_DELIVERY_QUEUE"
+queue = "webhook-delivery"
+
+[[queues.consumers]]
+queue = "matched-activity"
+max_batch_size = 5
+max_batch_timeout = 5
+
+[[queues.consumers]]
+queue = "webhook-delivery"
+max_batch_size = 5
+max_batch_timeout = 10
+max_retries = 8
+# Exhausted deliveries move here; their state is also in webhook_deliveries.
+dead_letter_queue = "webhook-delivery-dlq"
+
 [vars]
 RPC_RACER_BASE_URL = "https://evm.stupidtech.net"
 SCANNER_SHARD_COUNT = "2"

@@ -2,7 +2,9 @@ export type Env = {
   DB: D1Database;
   SCANNER_SHARD_1: DurableObjectNamespace;
   SCANNER_SHARD_2: DurableObjectNamespace;
-  MATCHED_ACTIVITY_QUEUE?: Queue<MatchedMessage>;
+  MATCHED_ACTIVITY_QUEUE: Queue<MatchedMessage>;
+  WEBHOOK_DELIVERY_QUEUE: Queue<DeliveryHook>;
+
   RPC_RACER_BASE_URL: string;
   SCANNER_SHARD_COUNT: string;
   SUBSCRIPTION_DEFAULT_QUOTA: string;
@@ -21,6 +23,23 @@ export type MatchedMessage = {
   trackedAddress: string;
   blockNumber: string;
   blockHash: string;
+};
+
+/**
+ * One message per (observation, destination) on the `webhook-delivery` queue.
+ * `bodyJson` is the exact, pre-serialized HTTP body that gets signed and sent,
+ * so retries reproduce a byte-identical, deterministically-signable payload.
+ */
+export type DeliveryHook = {
+  deliveryId: string;
+  observationId: string;
+  eventType: "activity.observed" | "webhook.test";
+  accountId: string;
+  webhookId: string;
+  chainId: number;
+  trackedAddress: string;
+  blockNumber: string;
+  bodyJson: string;
 };
 
 export type RateLimitTask = {

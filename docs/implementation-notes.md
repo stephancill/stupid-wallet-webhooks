@@ -2,6 +2,52 @@
 
 Milestone working notes for the EVM Address Notifications worker.
 
+## Milestone 3 — Fanout and Webhook Delivery
+
+Implemented from `docs/implementation-plan.md` §Milestone 3 and §Webhook Delivery.
+
+### What shipped
+
+- **Two-queue fanout/delivery path** completes the architecture:
+  - **`matched-activity`** (produced by the M2 scanner) is consumed by
+    `src/queues/fanout.ts` → looks up the persisted observation, enumerates
+    `active` subscriptions for (chainId, trackedAddress), **enforces each
+    subscription's activation block** (`active_from_block <= blockNumber`), and
+    enqueues one `DeliveryHook` per destination onto **`webhook-delivery`**.
+  - **`webhook-delivery`** is consumed by `src/queues/deliver.ts`:
+    HMAC-SHA256 signing over the exact body, strict timeout + response-size cap,
+    redirects disabled, retry classification (2xx success / retryable
+    `408/409/425/429/5xx` / other 4xx permanent), and a ledger update each
+    attempt.
+- **Idempotency / dedupe:** `webhook_deliveries` has a unique
+  (webhookId, eventId, eventType) constraint; the consumer skips anything
+  already delivered successfully, so duplicate queue deliveries don't re-send.
+- **Retries + DLQ:** the consumer `throw`s on retryable failure so Cloudflare
+  Queues retries with backoff; exhausted deliveries move to the
+  `webhook-delivery-dlq` dead-letter queue (`max_retries = 8`), and their state
+  is also reflected in `webhook_deliveries` for the delivery-history API.
+- **Deterministic bodies:** `src/queues/webhook-body.ts` reconstructs the exact
+  bytes from the stored observation `data`, so retries are byte-identical and
+  signatures/fixtures are reproducible (unit-tested).
+- Both consumers are dispatched from the worker's `queue()` handler by queue name.
+
+### Tests
+
+3 new unit tests (`test/queues.test.ts`) covering byte-stable webhook bodies,
+`createdAt` derivation from `blockTimestamp`, and observation `data` parsing.
+**Suite now 30 tests.**
+
+### Test caveat (local dev)
+
+Local `wrangler dev` has no HTTP path to *push* a message onto `matched-activity`
+or observe a rejected `webhook-delivery` retry, so the full queue round-trip is
+best exercised with a controlled chain (produce a matched message) plus a real
+receiver under Cloudflare/test harness. The pure boundaries (matching, signing,
+bodies, classification) are unit-tested; the delivery HTTP client classifies
+outcomes and was implemented in Milestone 1.
+
+--- Earlier milestones below ---
+
 ## Milestone 2 — Scanner and Matching
 
 Implemented from `docs/implementation-plan.md` §Milestone 2 and §Activity Model.
@@ -136,9 +182,12 @@ migrations apply --local`, and booting `wrangler dev --local` succeeded twice
 
 ## Open items / next steps
 
-- Move test delivery + delivery retries to the queue-based consumer in
-  Milestone 3 (signing/retry-classification pattern already in
-  `src/api/queues/webhookClient.ts`).
+- Milestone 3 delivery is on the queue consumer; the `POST /webhooks/:id/test`
+  path remains a synchronous helper (fine for a test ping) and reuses the same
+  signing/classification layer.
+- Full queue round-trips (matched → fanout → delivery → DLQ retry) need a
+  controlled chain + receiver under Cloudflare / a test harness; the local dev
+  runtime can't push into a queue over HTTP.
 - Wrangler is on `4.126.0` (includes the local `_cf_ALARM` fix). Under bun's
   `minimum-release-age`, `4.127.1` is not yet installable; there is no remaining
   `fix-local` workaround needed.

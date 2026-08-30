@@ -57,6 +57,15 @@ bun scripts/operator.mts ops
 
 Operator endpoints live under `/operator` with `Authorization: Bearer <operator-secret>`.
 
+## Queues (M3)
+
+- `matched-activity`: produced by the scanner (one message per
+  transaction-address bundle); consumed by the fan-out.
+- `webhook-delivery`: one message per (observation, destination); consumer signs
+  an deterministic `HMAC-SHA256` body, sends with a strict timeout/redirects
+  disabled, classifies retries, dedupes by `(webhookId, eventId, eventType)`,
+  and moves exhausted deliveries to `webhook-delivery-dlq`.
+
 ## Checks
 
 ```bash

@@ -1012,3 +1012,143 @@ function addressBytesToHex(bytes: Uint8Array | ArrayBuffer): string {
   const u8 = bytes instanceof ArrayBuffer ? new Uint8Array(bytes) : bytes;
   return _bytesToHex(u8);
 }
+
+// ---------------------------------------------------------------------------
+// Milestone 3: fanout + delivery
+// ---------------------------------------------------------------------------
+
+/** Observable row lookup used by the fanout consumer. */
+export type ObservationRow = {
+  observationId: string;
+  chainId: number;
+  blockNumber: string;
+  blockHash: string;
+  trackedAddress: string;
+  data: string; // the stored observation `data` JSON
+};
+
+export async function getObservationPayload(
+  db: D1Database,
+  observationId: string,
+): Promise<ObservationRow | null> {
+  const row = await db
+    .prepare("SELECT * FROM activity_observations WHERE id = ?")
+    .bind(observationId)
+    .first<Record<string, unknown>>();
+  if (row === null) return null;
+  return {
+    observationId: String(row.id),
+    chainId: Number(row.chain_id),
+    blockNumber: String(row.block_number),
+    blockHash: _bytesToHex(row.block_hash as Uint8Array),
+    trackedAddress: _bytesToHex(row.tracked_address as Uint8Array),
+    data: String(row.payload),
+  };
+}
+
+/**
+ * Subscriptions on a chain+address that are active and eligible to receive
+ * activity (active_from_block null or <= the activity block).
+ */
+export async function listEligibleSubscriptions(
+  db: D1Database,
+  chainId: number,
+  trackedAddress: string,
+  fromBlock: number,
+): Promise<
+  Array<{ id: string; account_id: string; webhook_id: string; active_from_block: number | null }>
+> {
+  const { results } = await db
+    .prepare(
+      "SELECT id, account_id, webhook_id, active_from_block FROM subscriptions WHERE chain_id = ? AND address = ? AND status = 'active' AND deleted_at IS NULL AND (active_from_block IS NULL OR active_from_block <= ?)",
+    )
+    .bind(chainId, hexToBytes(trackedAddress), fromBlock)
+    .all<{
+      id: string;
+      account_id: string;
+      webhook_id: string;
+      active_from_block: number | null;
+    }>();
+  return results.map((r) => ({
+    id: r.id,
+    account_id: r.account_id,
+    webhook_id: r.webhook_id,
+    active_from_block: r.active_from_block === null ? null : Number(r.active_from_block),
+  }));
+}
+
+/** Webhook without account scoping (used by the delivery consumer). */
+export async function getWebhookById(
+  db: D1Database,
+  webhookId: string,
+): Promise<WebhookRow | null> {
+  const row = await db
+    .prepare("SELECT * FROM webhooks WHERE id = ?")
+    .bind(webhookId)
+    .first<Record<string, unknown>>();
+  return row === null ? null : toWebhookRow(row);
+}
+
+/** True when a delivery for (webhook, event, type) already succeeded. */
+export async function hasSuccessfulDelivery(
+  db: D1Database,
+  webhookId: string,
+  eventId: string,
+  eventType: WebhookDeliveryRow["event_type"],
+): Promise<boolean> {
+  const row = await db
+    .prepare(
+      "SELECT 1 FROM webhook_deliveries WHERE webhook_id = ? AND event_id = ? AND event_type = ? AND status = 'success' LIMIT 1",
+    )
+    .bind(webhookId, eventId, eventType)
+    .first();
+  return row !== null;
+}
+
+/** A delivery row for a (webhook, event, type), if any. */
+export async function getDeliveryByEvent(
+  db: D1Database,
+  webhookId: string,
+  eventId: string,
+  eventType: WebhookDeliveryRow["event_type"],
+): Promise<WebhookDeliveryRow | null> {
+  const row = await db
+    .prepare(
+      "SELECT * FROM webhook_deliveries WHERE webhook_id = ? AND event_id = ? AND event_type = ?",
+    )
+    .bind(webhookId, eventId, eventType)
+    .first<Record<string, unknown>>();
+  return row === null ? null : toDeliveryRow(row);
+}
+
+export async function updateDelivery(
+  db: D1Database,
+  deliveryId: string,
+  fields: {
+    status: WebhookDeliveryRow["status"];
+    attempts: number;
+    last_response_status?: number | null;
+    last_error?: string | null;
+    next_retry_at?: string | null;
+  },
+): Promise<void> {
+  const sets = ["status = ?", "attempts = ?", "updated_at = ?"];
+  const params: unknown[] = [fields.status, fields.attempts, nowISO()];
+  if (fields.last_response_status !== undefined) {
+    sets.push("last_response_status = ?");
+    params.push(fields.last_response_status);
+  }
+  if (fields.last_error !== undefined) {
+    sets.push("last_error = ?");
+    params.push(fields.last_error);
+  }
+  if (fields.next_retry_at !== undefined) {
+    sets.push("next_retry_at = ?");
+    params.push(fields.next_retry_at);
+  }
+  params.push(deliveryId);
+  await db
+    .prepare(`UPDATE webhook_deliveries SET ${sets.join(", ")} WHERE id = ?`)
+    .bind(...params)
+    .run();
+}
