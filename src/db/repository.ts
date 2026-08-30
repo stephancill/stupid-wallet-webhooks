@@ -70,7 +70,7 @@ export type SubscriptionRow = {
 export type ChainRegistryRow = {
   chain_id: number;
   name: string | null;
-  status: "pending" | "active" | "degraded" | "unsupported";
+  status: "pending" | "active" | "degraded" | "unsupported" | "paused";
   reason: string | null;
   shard_id: number | null;
   last_probe_at: string | null;
@@ -160,7 +160,7 @@ function toSubscriptionRow(row: Record<string, unknown>): SubscriptionRow {
 
 function toChainRegistryRow(row: Record<string, unknown>): ChainRegistryRow {
   const raw = String(row.status);
-  const valid = ["pending", "active", "degraded", "unsupported"] as const;
+  const valid = ["pending", "active", "degraded", "unsupported", "paused"] as const;
   const status = (valid as readonly string[]).includes(raw)
     ? (raw as ChainRegistryRow["status"])
     : "pending";
@@ -1002,6 +1002,21 @@ export async function upsertObservation(
     )
     .run();
   return (created.meta.changes ?? 0) > 0;
+}
+
+/** Marks every observed observation in a now-orphaned block as `reverted`. */
+export async function markObservationsRevertedByBlock(
+  db: D1Database,
+  chainId: number,
+  blockNumber: number,
+): Promise<number> {
+  const res = await db
+    .prepare(
+      "UPDATE activity_observations SET status = 'reverted', reverted_at = ? WHERE chain_id = ? AND block_number = ? AND status = 'observed'",
+    )
+    .bind(nowISO(), chainId, blockNumber)
+    .run();
+  return res.meta.changes ?? 0;
 }
 
 function hexToBytes(hex: string): Uint8Array {

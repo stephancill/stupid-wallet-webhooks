@@ -209,6 +209,49 @@ operator.post(
   },
 );
 
+// Operator: pause / resume a chain's scanner (paused chains stop polling).
+operator.post(
+  "/chains/:chainId/pause",
+  zValidator("param", z.object({ chainId: z.coerce.number().int().positive() })),
+  async (c) => {
+    const { chainId } = c.req.valid("param");
+    const { updateChainRegistryStatus } = await import("../db/repository");
+    await updateChainRegistryStatus(c.env.DB, chainId, {
+      status: "paused",
+      reason: "paused by operator",
+    });
+    return c.json({ chainId, status: "paused" });
+  },
+);
+
+operator.post(
+  "/chains/:chainId/resume",
+  zValidator("param", z.object({ chainId: z.coerce.number().int().positive() })),
+  async (c) => {
+    const { chainId } = c.req.valid("param");
+    const { updateChainRegistryStatus } = await import("../db/repository");
+    await updateChainRegistryStatus(c.env.DB, chainId, { status: "active", reason: null });
+    return c.json({ chainId, status: "active" });
+  },
+);
+
+// Deliver a summary of chain health/lag from the registry (chain reporting).
+operator.get("/chains", async (c) => {
+  const { listChainRegistry } = await import("../db/repository");
+  const rows = await listChainRegistry(c.env.DB);
+  return c.json({
+    chains: rows.map((r) => ({
+      chainId: r.chain_id,
+      name: r.name,
+      status: r.status,
+      reason: r.reason,
+      shardId: r.shard_id,
+      cursor: r.cursor_block,
+      lastProbeAt: r.last_probe_at,
+    })),
+  });
+});
+
 function serializeAccount(account: {
   id: string;
   name: string;

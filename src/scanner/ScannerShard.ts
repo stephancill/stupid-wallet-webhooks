@@ -9,6 +9,7 @@ import {
   setChainCursor,
   setActiveFromBlockForChain,
   upsertObservation,
+  markObservationsRevertedByBlock,
 } from "../db/repository";
 import { resolveChain } from "../rpc/chain";
 import {
@@ -18,6 +19,7 @@ import {
   ethGetTransactionReceipt,
 } from "../rpc/client";
 import { analyzeBlock, finalizeBundles, observationData } from "../domain/activity";
+import { classifyChain, pushWindow, pruneTo, type HeldBlock } from "../domain/reorg";
 import { enqueueMatched } from "./queue";
 import type { Env } from "../env";
 
@@ -105,12 +107,15 @@ export class ScannerShard {
     }
 
     const chain = await getChainRegistry(this.db, chainId);
+    if (chain?.status === "paused") {
+      await this.schedule(30_000);
+      return;
+    }
     const cursor = chain?.cursor_block === null ? null : (chain?.cursor_block ?? null);
     const cursorHash = chain?.cursor_hash ?? null;
 
-    // First activation: anchor the cursor at the head (real hash) and set the
-    // subscription boundary so no historical (pre-subscription) activity is
-    // delivered.
+    // First activation: anchor the cursor at the head (real hash) and set it as
+    // the tip of the rolling window.
     if (cursor === null) {
       const headBlock = await ethGetBlockByNumber({
         baseUrl: this.env.RPC_RACER_BASE_URL,
@@ -120,6 +125,9 @@ export class ScannerShard {
       });
       await setChainCursor(this.db, chainId, Number(head), headBlock.hash);
       await setActiveFromBlockForChain(this.db, chainId, Number(head) + 1);
+      await this.saveWindow([
+        { number: Number(head), hash: headBlock.hash, parentHash: headBlock.parentHash },
+      ]);
       await this.schedule(pollInterval(head, chain?.block_speed_ms ?? null));
       return;
     }
@@ -131,31 +139,57 @@ export class ScannerShard {
       return;
     }
 
+    let window = await this.loadWindow();
     let processed = 0;
-    for (
-      let blockNumber = start;
-      blockNumber <= end && processed < MAX_BLOCKS_PER_PASS;
-      blockNumber += 1n, processed += 1
-    ) {
-      try {
-        const block = await ethGetBlockByNumber({
-          baseUrl: this.env.RPC_RACER_BASE_URL,
-          chainId,
-          blockNumber,
-        });
-        if (cursorHash !== null && block.parentHash !== cursorHash) {
-          await updateChainRegistryStatus(this.db, chainId, {
-            status: "degraded",
-            reason: "parent-hash mismatch (probable reorg); resumable on next pass in M4",
-          });
+    let blockNumber = start;
+    let lastHash = cursorHash;
+
+    while (blockNumber <= end && processed < MAX_BLOCKS_PER_PASS) {
+      const block = await ethGetBlockByNumber({
+        baseUrl: this.env.RPC_RACER_BASE_URL,
+        chainId,
+        blockNumber,
+      });
+      const verdict = classifyChain(window, { parentHash: block.parentHash, cursorHash: lastHash });
+
+      if (verdict.kind === "ok") {
+        try {
+          await this.processBlock({ chainId, block, trackedSet });
+        } catch (error) {
+          console.error(`scan error on chain ${chainId} block ${blockNumber}`, error);
           await this.schedule(MIN_POLL_INTERVAL_MS);
           return;
         }
-        await this.processBlock({ chainId, block, trackedSet });
+        const held = {
+          number: Number(block.number),
+          hash: block.hash,
+          parentHash: block.parentHash,
+        };
+        window = pushWindow(window, held);
+        await this.saveWindow(window);
+        lastHash = block.hash;
         await setChainCursor(this.db, chainId, Number(block.number), block.hash);
-      } catch (error) {
-        // Incomplete processing: do not advance the cursor beyond this block.
-        console.error(`scan error on chain ${chainId} block ${blockNumber}`, error);
+        blockNumber += 1n;
+        processed += 1;
+      } else if (verdict.kind === "reorg") {
+        let revertedTotal = 0;
+        for (const orphan of verdict.orphaned) {
+          revertedTotal += await markObservationsRevertedByBlock(this.db, chainId, orphan);
+        }
+        window = pruneTo(window, verdict.ancestor);
+        await this.saveWindow(window);
+        await setChainCursor(this.db, chainId, verdict.ancestor.number, verdict.ancestor.hash);
+        lastHash = verdict.ancestor.hash;
+        console.log(
+          `reorg on chain ${chainId}: depth ${verdict.orphaned.length}, ${revertedTotal} observation(s) reverted; replaying`,
+        );
+        // Replay this block now that its parent is the found ancestor; we do not
+        // advance `blockNumber`, so the loop reprocesses it canonically.
+      } else {
+        await updateChainRegistryStatus(this.db, chainId, {
+          status: "degraded",
+          reason: "no common ancestor within retained window (deep reorg)",
+        });
         await this.schedule(MIN_POLL_INTERVAL_MS);
         return;
       }
@@ -166,6 +200,15 @@ export class ScannerShard {
         ? MIN_POLL_INTERVAL_MS
         : pollInterval(head, chain?.block_speed_ms ?? null);
     await this.schedule(nextInterval);
+  }
+
+  private async loadWindow(): Promise<HeldBlock[]> {
+    const stored = await this.state.storage.get<HeldBlock[]>("blockWindow");
+    return Array.isArray(stored) ? stored : [];
+  }
+
+  private async saveWindow(window: HeldBlock[]): Promise<void> {
+    await this.state.storage.put("blockWindow", window);
   }
 
   private async processBlock({

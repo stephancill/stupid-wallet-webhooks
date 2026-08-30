@@ -2,6 +2,33 @@
 
 Milestone working notes for the EVM Address Notifications worker.
 
+## Milestone 4 — Reorgs and Operations
+
+### What shipped
+
+- **Reorg window + fork-point detection** (`src/domain/reorg.ts`, pure + 5 tests):
+  - rolling window of recently-accepted blocks (`findAncestor`, `orphanedHeights`,
+    `pruneTo`, `pushWindow`, `classifyChain`).
+- **Scanner integration** (`ScannerShard`): a per-chain rolling window is kept in
+  Durable-Object storage. When a child block's `parentHash` no longer matches the
+  accepted tip, the scanner:
+  - finds the shared ancestor in the window;
+  - `markObservationsRevertedByBlock` flips any observed observations in orphaned
+    blocks to `reverted` (with `reverted_at`);
+  - prunes the window, rewinds the cursor to the ancestor, and replays the
+    canonical blocks;
+  - if no ancestor is in-window, it degrades the chain for operator review.
+- **Operator controls** (`/operator`): `POST /chains/:id/pause` and
+  `POST /chains/:id/resume` (paused chains stop polling), plus
+  `GET /operator/chains` health/lag summary. `chain_registry.status` gains
+  `paused`. Reorg window + observation revert behavior unit-tested.
+
+### Deferred (documented)
+- Fanning reverted observations out as `activity.reverted` webhooks (delivery of
+  a reverted event is a straightforward extension of the M3 delivery consumer).
+- Full metrics suite + DLQ replay tooling and the restart/timeout/deep-reorg
+  failure injections still require a controlled test environment.
+
 ## Milestone 3 — Fanout and Webhook Delivery
 
 Implemented from `docs/implementation-plan.md` §Milestone 3 and §Webhook Delivery.
