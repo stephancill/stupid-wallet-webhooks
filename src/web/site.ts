@@ -49,13 +49,14 @@ export const siteHtml = `<!DOCTYPE html>
           <td>Top-level txs (incl. zero-value and reverted), incoming native value,
               ERC-20 and ERC-721 <code>Transfer</code>s</td></tr>
       <tr><td>Chains</td>
-          <td>Ethereum, Base, Optimism, Arbitrum — more resolvable on request</td></tr>
+          <td>All chains*</td></tr>
       <tr><td>Idempotent</td>
           <td>Deterministic <code>webhook-id</code>; dedupe safely (at-least-once)</td></tr>
       <tr><td>Delivery ledger</td>
           <td>30-day history per webhook: every attempt, status, and outcome</td></tr>
     </tbody>
   </table>
+  <p><em>* Supported chains depend on <a target="_blank" href="https://evm.stupidtech.net">evm.stupidtech.net</a> — a chain is supported when it resolves there.</em></p>
 
   <h2>Example event</h2>
   <p>A signed delivery looks like this (hashes abbreviated):</p>
