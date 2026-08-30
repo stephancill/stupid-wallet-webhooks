@@ -2,16 +2,11 @@
 
 Multi-tenant service that lets customers subscribe to EVM addresses and receive
 signed webhooks for top-level transactions, native value, ERC-20, and ERC-721
-activity. See `docs/implementation-plan.md` for the full product spec and
-`docs/implementation-notes.md` for build notes.
-
-> Milestone status: **Milestone 1 (API + persistence)** implemented. Scanner
-> (M2), fanout/webhook delivery (M3), reorgs (M4), and the production pilot (M5)
-> remain.
+activity.
 
 ## Stack
 
-Cloudflare Workers · Hono · D1 · Durable Objects · Queues (later) · Zod · viem ·
+Cloudflare Workers · Hono · D1 · Durable Objects · Queues · Zod · viem ·
 (stupid tech) template.
 
 ## Dev setup
@@ -66,7 +61,7 @@ POST /operator/chains/:id/pause|/resume
 GET  /operator/scanner-operations  # pending scanner commands
 ```
 
-## Queues (M3)
+## Queues
 
 - `matched-activity`: produced by the scanner (one message per
   transaction-address bundle); consumed by the fan-out.
