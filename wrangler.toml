@@ -1,0 +1,33 @@
+name = "address-notifications"
+main = "src/index.ts"
+compatibility_date = "2026-04-21"
+workers_dev = false
+
+[[d1_databases]]
+binding = "DB"
+database_name = "address-notifications-db"
+# Placeholder for local development. Replace with the real database_id before
+# deploying to Cloudflare.
+database_id = "00000000-0000-0000-0000-000000000000"
+
+[[durable_objects.bindings]]
+name = "SCANNER_SHARD_1"
+class_name = "ScannerShard"
+
+[[durable_objects.bindings]]
+name = "SCANNER_SHARD_2"
+class_name = "ScannerShard"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ScannerShard"]
+
+[vars]
+RPC_RACER_BASE_URL = "https://evm.stupidtech.net"
+SCANNER_SHARD_COUNT = "2"
+SUBSCRIPTION_DEFAULT_QUOTA = "1000"
+CHAIN_DEFAULT_QUOTA = "20"
+
+
+[triggers]
+crons = ["*/5 * * * *"]
