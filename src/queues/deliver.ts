@@ -8,6 +8,7 @@ import {
 } from "../db/repository";
 import { deriveWebhookSecret, webhookSignature } from "../domain/keys";
 import { attemptWebhookDelivery } from "../api/queues/webhookClient";
+import { classifyDelivery } from "./plan";
 
 /**
  * `webhook-delivery` consumer. For each destination message: dedupes against an
@@ -76,8 +77,9 @@ async function attemptOneDelivery(work: DeliveryHook, url: string, env: Env): Pr
   });
 
   const deliveryId = existing?.id ?? work.deliveryId;
+  const result = classifyDelivery({ delivered: outcome.delivered, retryable: outcome.retryable });
 
-  if (outcome.delivered) {
+  if (result === "success") {
     await updateDelivery(env.DB, deliveryId, {
       status: "success",
       attempts,
@@ -87,7 +89,7 @@ async function attemptOneDelivery(work: DeliveryHook, url: string, env: Env): Pr
     return;
   }
 
-  if (outcome.retryable) {
+  if (result === "retry") {
     await updateDelivery(env.DB, deliveryId, {
       status: "pending",
       attempts,

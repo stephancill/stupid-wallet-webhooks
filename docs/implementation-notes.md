@@ -39,7 +39,7 @@ Implemented from `docs/implementation-plan.md` §Milestone 3 and §Webhook Deliv
 
 ### Test caveat (local dev)
 
-Local `wrangler dev` has no HTTP path to *push* a message onto `matched-activity`
+Local `wrangler dev` has no HTTP path to _push_ a message onto `matched-activity`
 or observe a rejected `webhook-delivery` retry, so the full queue round-trip is
 best exercised with a controlled chain (produce a matched message) plus a real
 receiver under Cloudflare/test harness. The pure boundaries (matching, signing,
@@ -182,12 +182,17 @@ migrations apply --local`, and booting `wrangler dev --local` succeeded twice
 
 ## Open items / next steps
 
-- Milestone 3 delivery is on the queue consumer; the `POST /webhooks/:id/test`
-  path remains a synchronous helper (fine for a test ping) and reuses the same
-  signing/classification layer.
-- Full queue round-trips (matched → fanout → delivery → DLQ retry) need a
-  controlled chain + receiver under Cloudflare / a test harness; the local dev
-  runtime can't push into a queue over HTTP.
+- Milestone 4: reorgs (rolling block/observation window + `activity.reverted`),
+  chain-health metrics, retention cleanup + DLQ replay, and failure injections.
+- Local transport note: an exploratory local harness proved that miniflare's
+  local-dev runtime does **not** loop produced messages back into a worker's own
+  `queue()` consumer, so the matched→delivery→DLQ round-trip can't run under
+  `wrangler dev` (see M3 caveat). The deterministic parts — fan-out eligibility
+  (activation block), classification, and dedup — are extracted into pure,
+  unit-tested functions (`src/queues/plan.ts`, 5 tests).
+  - An operator-only `POST /operator/inject` (enabled only with
+    `ALLOW_INSECURE_TEST_WEBHOOKS=1`) writes an observation + enqueues to
+    `matched-activity`; on real Cloudflare Queues this completes the flow.
 - Wrangler is on `4.126.0` (includes the local `_cf_ALARM` fix). Under bun's
   `minimum-release-age`, `4.127.1` is not yet installable; there is no remaining
   `fix-local` workaround needed.

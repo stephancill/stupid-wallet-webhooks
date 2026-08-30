@@ -16,6 +16,8 @@ import {
 import { IDs } from "../domain/ids";
 import { generateApiKey, hashApiKey } from "../domain/keys";
 import { redispatchPending } from "../scanner/outbox";
+import { upsertObservation } from "../db/repository";
+import { enqueueMatched } from "../scanner/queue";
 
 const createAccountSchema = z.object({
   name: z.string().min(1).max(128),
@@ -139,6 +141,52 @@ operator.get("/scanner-operations", async (c) => {
       createdAt: row.created_at,
     })),
   });
+});
+
+// Local-only E2E helper: inject a synthetic matched observation and push it
+// onto the matched-activity queue so the fan-out + delivery path runs in
+// `wrangler dev --local`. Only enabled when ALLOW_INSECURE_TEST_WEBHOOKS=1.
+const injectSchema = z.object({
+  observationId: z.string().min(1),
+  chainId: z.coerce.number().int().positive(),
+  trackedAddress: z.string().min(1).max(64),
+  blockNumber: z.string().min(1),
+  blockHash: z.string().min(1),
+  txHash: z.string().min(1),
+  txFrom: z.string().min(1),
+  data: z.record(z.unknown()),
+});
+
+operator.post("/inject", zValidator("json", injectSchema), async (c) => {
+  if (c.env.ALLOW_INSECURE_TEST_WEBHOOKS !== "1") {
+    throw new HTTPException(403, { message: "inject is disabled" });
+  }
+  const body = c.req.valid("json");
+  const inserted = await upsertObservation(c.env.DB, {
+    observationId: body.observationId,
+    chainId: body.chainId,
+    txHash: body.txHash,
+    trackedAddress: body.trackedAddress,
+    blockNumber: body.blockNumber,
+    blockHash: body.blockHash,
+    status: "observed",
+    initiator: body.txFrom,
+    payload: JSON.stringify(body.data),
+  });
+  await enqueueMatched({
+    queue: c.env.MATCHED_ACTIVITY_QUEUE,
+    observations: [
+      {
+        observationId: body.observationId,
+        chainId: body.chainId,
+        txHash: body.txHash,
+        trackedAddress: body.trackedAddress,
+        blockNumber: body.blockNumber,
+        blockHash: body.blockHash,
+      },
+    ],
+  });
+  return c.json({ message: "injected", observationId: body.observationId, inserted });
 });
 
 // Operator may retry any unsupported chain.

@@ -5,6 +5,7 @@ export type Env = {
   MATCHED_ACTIVITY_QUEUE: Queue<MatchedMessage>;
   WEBHOOK_DELIVERY_QUEUE: Queue<DeliveryHook>;
 
+  ALLOW_INSECURE_TEST_WEBHOOKS?: string;
   RPC_RACER_BASE_URL: string;
   SCANNER_SHARD_COUNT: string;
   SUBSCRIPTION_DEFAULT_QUOTA: string;

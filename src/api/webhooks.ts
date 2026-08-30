@@ -44,7 +44,9 @@ webhooks.post("/", zValidator("json", createSchema), async (c) => {
   const ctx = authContext(c);
   const { url } = c.req.valid("json");
 
-  const validation = validateWebhookUrl(url);
+  const validation = validateWebhookUrl(url, {
+    allowInsecure: c.env.ALLOW_INSECURE_TEST_WEBHOOKS === "1",
+  });
   if (!validation.ok) {
     throw new HTTPException(400, { message: validation.reason });
   }

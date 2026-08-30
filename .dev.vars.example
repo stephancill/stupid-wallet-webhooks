@@ -1,3 +1,5 @@
 OPERATOR_SECRET=change-me
 API_KEY_PEPPER=change-me
 WEBHOOK_SIGNING_MASTER=change-me
+# Local-only: set to 1 to allow loopback webhook URLs for integration tests.
+ALLOW_INSECURE_TEST_WEBHOOKS=0

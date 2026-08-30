@@ -56,7 +56,10 @@ function isPrivateHostname(host: string): boolean {
   );
 }
 
-export function validateWebhookUrl(raw: string): UrlValidation {
+export function validateWebhookUrl(
+  raw: string,
+  options: { allowInsecure?: boolean } = {},
+): UrlValidation {
   let parsed: URL;
   try {
     parsed = new URL(raw);
@@ -64,7 +67,7 @@ export function validateWebhookUrl(raw: string): UrlValidation {
     return { ok: false, reason: "URL is not valid" };
   }
 
-  if (parsed.protocol !== "https:") {
+  if (parsed.protocol !== "https:" && !(options.allowInsecure && parsed.protocol === "http:")) {
     return { ok: false, reason: "URL must use https" };
   }
   if (parsed.username !== "" || parsed.password !== "") {
@@ -72,9 +75,22 @@ export function validateWebhookUrl(raw: string): UrlValidation {
   }
 
   const host = parsed.hostname;
-  if (isPrivateHostname(host) || isPrivateIpLiteral(host)) {
-    return { ok: false, reason: "Webhook URL must target a public internet address" };
+  if (!(options.allowInsecure && isLoopbackHost(host))) {
+    if (isPrivateHostname(host) || isPrivateIpLiteral(host)) {
+      return { ok: false, reason: "Webhook URL must target a public internet address" };
+    }
   }
 
   return { ok: true, url: parsed.toString() };
+}
+
+function isLoopbackHost(host: string): boolean {
+  const lower = host.toLowerCase();
+  return (
+    lower === "localhost" ||
+    lower === "127.0.0.1" ||
+    lower === "::1" ||
+    lower === "[::1]" ||
+    lower.startsWith("127.")
+  );
 }
