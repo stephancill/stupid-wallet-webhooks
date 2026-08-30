@@ -2,6 +2,7 @@ export type Env = {
   DB: D1Database;
   SCANNER_SHARD_1: DurableObjectNamespace;
   SCANNER_SHARD_2: DurableObjectNamespace;
+  MATCHED_ACTIVITY_QUEUE?: Queue<MatchedMessage>;
   RPC_RACER_BASE_URL: string;
   SCANNER_SHARD_COUNT: string;
   SUBSCRIPTION_DEFAULT_QUOTA: string;
@@ -10,6 +11,16 @@ export type Env = {
   API_KEY_PEPPER: string;
   WEBHOOK_SIGNING_MASTER: string;
   RATELIMITER?: RateLimitTask;
+};
+
+/** One message per (chainId, transactionHash, trackedAddress) observation. */
+export type MatchedMessage = {
+  observationId: string;
+  chainId: number;
+  txHash: string;
+  trackedAddress: string;
+  blockNumber: string;
+  blockHash: string;
 };
 
 export type RateLimitTask = {

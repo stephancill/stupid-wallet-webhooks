@@ -30,6 +30,58 @@ export async function commandId(canonical: string): Promise<string> {
   return `cmd_${hash}`;
 }
 
+function truncatedHash(prefix: string, canonical: string, length = 56): Promise<string> {
+  return sha256Hex(canonical).then((hash) => `${prefix}_${hash.slice(0, length)}`);
+}
+
+/**
+ * Observation (webhook event) id. Deterministic per logical bundle
+ * (chainId, txHash, trackedAddress) plus block hash, so duplicate delivery and
+ * reorg compensation address the exact same observation.
+ */
+export function observationId({
+  chainId,
+  txHash,
+  trackedAddress,
+  blockHash,
+}: {
+  chainId: number;
+  txHash: string;
+  trackedAddress: string;
+  blockHash: string;
+}): Promise<string> {
+  return truncatedHash("evt", `${chainId}|${txHash}|${trackedAddress}|${blockHash}`);
+}
+
+/** Logger bundle key shared by bundle/observation/effect ids. */
+export function bundleKey({
+  chainId,
+  txHash,
+  trackedAddress,
+}: {
+  chainId: number;
+  txHash: string;
+  trackedAddress: string;
+}): string {
+  return `${chainId}|${txHash}|${trackedAddress}`;
+}
+
+/**
+ * Effect id: observation id + effect discriminator (`native` or a token log
+ * index). Deterministic with the observation id.
+ */
+export function effectId({
+  observationId: obsId,
+  kind,
+  logIndex,
+}: {
+  observationId: string;
+  kind: "native" | "erc20" | "erc721";
+  logIndex?: number;
+}): Promise<string> {
+  return truncatedHash("eff", `${obsId}|${kind}${logIndex === undefined ? "" : `|${logIndex}`}`);
+}
+
 export const IDs = {
   account: () => newId("acct"),
   apiKey: () => newId("key"),

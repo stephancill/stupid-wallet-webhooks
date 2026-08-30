@@ -38,22 +38,22 @@ bun scripts/operator.mts ops
 
 ## Public API (auth: `Authorization: Bearer <api-key>`)
 
-| Method | Path | Purpose |
-|---|---|---|
-| POST | `/v1/webhooks` | Create webhook (returns signing secret once) |
-| GET | `/v1/webhooks` | List webhooks |
-| GET | `/v1/webhooks/:id` | Get a webhook |
-| POST | `/v1/webhooks/:id/test` | Signed test delivery |
-| DELETE | `/v1/webhooks/:id` | Delete a webhook (deactivates its subscriptions) |
-| GET | `/v1/webhook-deliveries` | 30-day delivery history (paginated) |
-| GET | `/v1/webhook-deliveries/:id` | One delivery |
-| GET | `/v1/subscriptions` | List subscriptions |
-| POST | `/v1/subscriptions` | Create subscriptions (`address`, `chainIds`, `webhookId`) |
-| GET | `/v1/subscriptions/:id` | Get a subscription |
-| DELETE | `/v1/subscriptions/:id` | Deactivate a subscription |
-| GET | `/v1/chains` | List known chains + product status |
-| GET | `/v1/chains/:id` | Chain metadata + product status |
-| POST | `/v1/chains/:id/retry` | Manual capability retry (needs an unsupported sub) |
+| Method | Path                         | Purpose                                                   |
+| ------ | ---------------------------- | --------------------------------------------------------- |
+| POST   | `/v1/webhooks`               | Create webhook (returns signing secret once)              |
+| GET    | `/v1/webhooks`               | List webhooks                                             |
+| GET    | `/v1/webhooks/:id`           | Get a webhook                                             |
+| POST   | `/v1/webhooks/:id/test`      | Signed test delivery                                      |
+| DELETE | `/v1/webhooks/:id`           | Delete a webhook (deactivates its subscriptions)          |
+| GET    | `/v1/webhook-deliveries`     | 30-day delivery history (paginated)                       |
+| GET    | `/v1/webhook-deliveries/:id` | One delivery                                              |
+| GET    | `/v1/subscriptions`          | List subscriptions                                        |
+| POST   | `/v1/subscriptions`          | Create subscriptions (`address`, `chainIds`, `webhookId`) |
+| GET    | `/v1/subscriptions/:id`      | Get a subscription                                        |
+| DELETE | `/v1/subscriptions/:id`      | Deactivate a subscription                                 |
+| GET    | `/v1/chains`                 | List known chains + product status                        |
+| GET    | `/v1/chains/:id`             | Chain metadata + product status                           |
+| POST   | `/v1/chains/:id/retry`       | Manual capability retry (needs an unsupported sub)        |
 
 Operator endpoints live under `/operator` with `Authorization: Bearer <operator-secret>`.
 

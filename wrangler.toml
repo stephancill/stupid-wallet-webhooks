@@ -22,6 +22,10 @@ class_name = "ScannerShard"
 tag = "v1"
 new_sqlite_classes = ["ScannerShard"]
 
+[[queues.producers]]
+binding = "MATCHED_ACTIVITY_QUEUE"
+queue = "matched-activity"
+
 [vars]
 RPC_RACER_BASE_URL = "https://evm.stupidtech.net"
 SCANNER_SHARD_COUNT = "2"

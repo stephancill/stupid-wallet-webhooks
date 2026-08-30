@@ -1,4 +1,5 @@
 import { nowISO } from "./timestamp";
+import { bytesToHex as _bytesToHex, hexToBytes as _hexToBytes } from "viem";
 
 export type AccountRow = {
   id: string;
@@ -648,6 +649,9 @@ export async function updateChainRegistryStatus(
     shard_id?: number | null;
     name?: string | null;
     last_probe_at?: string | null;
+    block_speed_ms?: number | null;
+    cursor_block?: number | null;
+    cursor_hash?: string | null;
   },
 ): Promise<void> {
   const sets: string[] = ["updated_at = ?"];
@@ -671,6 +675,18 @@ export async function updateChainRegistryStatus(
   if (fields.last_probe_at !== undefined) {
     sets.push("last_probe_at = ?");
     params.push(fields.last_probe_at);
+  }
+  if (fields.block_speed_ms !== undefined) {
+    sets.push("block_speed_ms = ?");
+    params.push(fields.block_speed_ms);
+  }
+  if (fields.cursor_block !== undefined) {
+    sets.push("cursor_block = ?");
+    params.push(fields.cursor_block);
+  }
+  if (fields.cursor_hash !== undefined) {
+    sets.push("cursor_hash = ?");
+    params.push(fields.cursor_hash);
   }
   params.push(chainId);
   await db
@@ -906,4 +922,93 @@ function toDeliveryRow(row: Record<string, unknown>): WebhookDeliveryRow {
     created_at: String(row.created_at),
     updated_at: String(row.updated_at),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Scanner: tracked addresses, cursors, observations
+// ---------------------------------------------------------------------------
+
+/** Active tracked addresses for a chain (ref_count > 0), as lowercase hex. */
+export async function listTrackedAddressesForChain(
+  db: D1Database,
+  chainId: number,
+): Promise<string[]> {
+  const { results } = await db
+    .prepare("SELECT address FROM tracked_addresses WHERE chain_id = ? AND ref_count > 0")
+    .bind(chainId)
+    .all<{ address: Uint8Array | ArrayBuffer }>();
+  return results.map((row) => addressBytesToHex(row.address));
+}
+
+export async function setChainCursor(
+  db: D1Database,
+  chainId: number,
+  cursor_block: number,
+  cursor_hash: string,
+): Promise<void> {
+  await db
+    .prepare(
+      "UPDATE chain_registry SET cursor_block = ?, cursor_hash = ?, updated_at = ? WHERE chain_id = ?",
+    )
+    .bind(cursor_block, cursor_hash, nowISO(), chainId)
+    .run();
+}
+
+/** Sets the activation boundary on active subscriptions that don't have one yet. */
+export async function setActiveFromBlockForChain(
+  db: D1Database,
+  chainId: number,
+  fromBlock: number,
+): Promise<void> {
+  await db
+    .prepare(
+      "UPDATE subscriptions SET active_from_block = ?, updated_at = ? WHERE chain_id = ? AND status = 'active' AND deleted_at IS NULL AND active_from_block IS NULL",
+    )
+    .bind(fromBlock, nowISO(), chainId)
+    .run();
+}
+
+export type ObservationInsert = {
+  observationId: string;
+  chainId: number;
+  txHash: string;
+  trackedAddress: string;
+  blockNumber: string;
+  blockHash: string;
+  status: "observed" | "reverted";
+  initiator: string;
+  payload: string;
+};
+
+export async function upsertObservation(
+  db: D1Database,
+  observation: ObservationInsert,
+): Promise<boolean> {
+  const created = await db
+    .prepare(
+      "INSERT INTO activity_observations (id, chain_id, tx_hash, tracked_address, block_number, block_hash, status, initiator, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING",
+    )
+    .bind(
+      observation.observationId,
+      observation.chainId,
+      hexToBytes(observation.txHash),
+      hexToBytes(observation.trackedAddress),
+      Number(observation.blockNumber),
+      hexToBytes(observation.blockHash),
+      observation.status,
+      observation.initiator, // TEXT column: store the raw hex string
+      observation.payload,
+      nowISO(),
+    )
+    .run();
+  return (created.meta.changes ?? 0) > 0;
+}
+
+function hexToBytes(hex: string): Uint8Array {
+  return _hexToBytes(hex as `0x${string}`);
+}
+
+function addressBytesToHex(bytes: Uint8Array | ArrayBuffer): string {
+  const u8 = bytes instanceof ArrayBuffer ? new Uint8Array(bytes) : bytes;
+  return _bytesToHex(u8);
 }

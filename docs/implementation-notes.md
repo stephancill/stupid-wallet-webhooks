@@ -2,7 +2,66 @@
 
 Milestone working notes for the EVM Address Notifications worker.
 
-## Milestone 1 — API and Persistence
+## Milestone 2 — Scanner and Matching
+
+Implemented from `docs/implementation-plan.md` §Milestone 2 and §Activity Model.
+
+### What shipped
+
+- **`src/domain/activity.ts`** — pure matching module:
+  - Strict `Transfer` log decoding (ERC-20: exactly 3 topics + one 32-byte data
+    word; ERC-721: 4 topics, token id in topic 3). Malformed lookalikes are
+    counted, never emitted.
+  - `analyzeBlock`: one draft per `(transaction, trackedAddress)` for tracked
+    senders (every mined tx, including zero-value and reverted), token effects
+    oriented by tracked participant (self when both sides tracked), and incoming
+    native candidates.
+  - `finalizeBundles`: joins receipts, resolves `success`/`reverted`, drops
+    effects on reverted txs, orders deterministically (native first, then tokens
+    by logIndex), and attaches deterministic observation + effect ids. Throws on
+    a missing/mismatched receipt so the cursor is never advanced on incomplete
+    processing.
+  - No outbound native effect for the initiator (transaction.value represents
+    it); `createdContractAddress` from successful contract-creation receipts.
+- **`src/domain/ids.ts`** — deterministic `observationId` (bundle key + block
+  hash, the webhook event id), `bundleKey`, and `effectId`.
+- **`src/rpc/client.ts`** — rpc-racer JSON-RPC client (`eth_blockNumber`,
+  `eth_getBlockByNumber`, `eth_getLogs` keyed by the exact block hash,
+  `eth_getTransactionReceipt`) with timeouts + bounded retries. Returns
+  normalized block/log/receipt types.
+- **`src/scanner/queue.ts`** + `MATCHED_ACTIVITY_QUEUE` producer binding — one
+  message per matched bundle (the Milestone-3 fanout consumer reads this).
+- **`src/scanner/ScannerShard.ts`** rewritten as a per-chain scanner:
+  - Owns cursors (`chain_registry.cursor_block/hash`), scheduled alarms, and
+    reads the tracked set from D1 each pass.
+  - First activation anchors the cursor at the head (real block hash) and sets
+    `active_from_block = head + 1` (no historical backfill).
+  - Processes blocks up to the head sequentially, bounded per pass
+    (`MAX_BLOCKS_PER_PASS`), advances cursor only after persist + enqueue
+    succeed, and degrades on a parent-hash mismatch (resumable reorg handling
+    lands in M4).
+  - Still applies the Milestone-1 control-plane commands (subscribe/unsubscribe/
+    retry_chain) so the migration path is preserved.
+- Repository additions for the scanner: `listTrackedAddressesForChain`,
+  `setChainCursor`, `setActiveFromBlockForChain`, `upsertObservation`.
+
+### Tests
+
+12 new unit tests (`test/activity.test.ts`) covering ERC-20/ERC-721 decoding,
+malformed/non-transfer counting, sender bundles with no effects, outgoing token,
+reverted sender (no effects), native dropped on reverted, self-transfers, effect
+ordering, and deterministic ids. Total suite: 27 tests, all passing.
+
+### Live-run note
+
+Under `wrangler dev --local`, chain activation/`eth_*` reads work via the
+public rpc-racer feed and the cursor boots correctly; delivering new mined
+blocks depends on the local DO alarm scheduler firing, which is flaky in local
+mode (alarms are managed by the same workerd `_cf_ALARM` machinery). Deployed /
+`--remote`, controlled-chain, or test-scheduled fixtures are the way to observe
+continuous scanning; Milestone 3 adds the fanout consumer and full delivery.
+
+--- Earlier milestones below ---
 
 Implemented the API + persistence layer from `docs/implementation-plan.md`.
 
@@ -91,4 +150,4 @@ were supplied: SQLITE_ERROR
   `src/api/queues/webhookClient.ts`).
 - Revisit a wrangler upgrade once a fix for the local `_cf_ALARM` bug is
   confirmed (bun's `minimum-release-age` currently blocks installing wrangler
-  >4.125.0).
+  > 4.125.0).
