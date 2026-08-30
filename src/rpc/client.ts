@@ -37,7 +37,9 @@ export function setInternalRpc(config: InternalRpcConfig | null): void {
 }
 
 function ENDPOINT({ baseUrl, chainId }: { baseUrl: string; chainId: number | string }): string {
-  const direct = process.env.RPC_DIRECT_URL;
+  // RPC_DIRECT_URL is a bun (test/fork) escape hatch; `process` doesn't exist in
+  // the Workers runtime, so guard it.
+  const direct = typeof process !== "undefined" ? process.env.RPC_DIRECT_URL : undefined;
   if (typeof direct === "string" && direct.trim().length > 0) {
     return direct.trim().replace(/\/$/, "");
   }

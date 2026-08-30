@@ -112,7 +112,8 @@ export class ScannerShard {
     let head: bigint;
     try {
       head = await ethBlockNumber({ baseUrl: this.env.RPC_RACER_BASE_URL, chainId });
-    } catch {
+    } catch (error) {
+      console.error(`scan: head read failed [chain ${chainId}]`, String(error));
       await this.schedule(MIN_POLL_INTERVAL_MS);
       return;
     }
