@@ -77,6 +77,7 @@ export type ChainRegistryRow = {
   cursor_block: number | null;
   cursor_hash: string | null;
   block_speed_ms: number | null;
+  last_head_block: number | null;
   created_at: string;
   updated_at: string;
 };
@@ -174,6 +175,7 @@ function toChainRegistryRow(row: Record<string, unknown>): ChainRegistryRow {
     cursor_block: row.cursor_block === null ? null : Number(row.cursor_block),
     cursor_hash: row.cursor_hash === null ? null : String(row.cursor_hash),
     block_speed_ms: row.block_speed_ms === null ? null : Number(row.block_speed_ms),
+    last_head_block: row.last_head_block === null ? null : Number(row.last_head_block),
     created_at: String(row.created_at),
     updated_at: String(row.updated_at),
   };
@@ -952,6 +954,103 @@ export async function setChainCursor(
     )
     .bind(cursor_block, cursor_hash, nowISO(), chainId)
     .run();
+}
+
+/** Records the most recently observed head so chain lag can be computed. */
+export async function setChainHead(
+  db: D1Database,
+  chainId: number,
+  headBlock: number,
+): Promise<void> {
+  await db
+    .prepare("UPDATE chain_registry SET last_head_block = ?, updated_at = ? WHERE chain_id = ?")
+    .bind(headBlock, nowISO(), chainId)
+    .run();
+}
+
+/** Computes per-chain lag plus a set of alerts for the operator surface. */
+export async function observeSummary(db: D1Database): Promise<{
+  chains: Array<{
+    chainId: number;
+    status: string;
+    cursor: number | null;
+    head: number | null;
+    lag: number | null;
+    reason: string | null;
+  }>;
+  deliveries: { pending: number; success: number; failed: number; dead_lettered: number };
+  observations: { observed: number; reverted: number };
+  pendingCommands: number;
+  alerts: Array<{ severity: string; message: string }>;
+}> {
+  const [rows, del, obs, pendingRow] = await Promise.all([
+    listChainRegistry(db),
+    db
+      .prepare("SELECT status, COUNT(*) AS c FROM webhook_deliveries GROUP BY status")
+      .all<{ status: string; c: number }>(),
+    db
+      .prepare("SELECT status, COUNT(*) AS c FROM activity_observations GROUP BY status")
+      .all<{ status: string; c: number }>(),
+    db
+      .prepare("SELECT COUNT(*) AS c FROM scanner_operations WHERE status = 'pending'")
+      .first<{ c: number }>(),
+  ]);
+
+  const lag = (cursor: number | null, head: number | null): number | null =>
+    cursor !== null && head !== null ? Math.max(0, head - cursor) : null;
+
+  const chains = rows.map((chain) => ({
+    chainId: chain.chain_id,
+    status: chain.status,
+    cursor: chain.cursor_block,
+    head: chain.last_head_block,
+    lag: lag(chain.cursor_block, chain.last_head_block),
+    reason: chain.reason,
+  }));
+
+  const count = (list: Array<{ status: string; c: number }>, key: string) =>
+    list.find((r) => r.status === key)?.c ?? 0;
+  const deliveries = {
+    pending: count(del?.results ?? [], "pending"),
+    success: count(del?.results ?? [], "success"),
+    failed: count(del?.results ?? [], "failed"),
+    dead_lettered: count(del?.results ?? [], "dead_lettered"),
+  };
+
+  const alerts: Array<{ severity: string; message: string }> = [];
+  for (const chain of chains) {
+    if (chain.status === "degraded")
+      alerts.push({
+        severity: "warning",
+        message: `chain ${chain.chainId} is degraded (${chain.reason ?? "unknown"})`,
+      });
+    if (chain.status === "paused")
+      alerts.push({ severity: "warning", message: `chain ${chain.chainId} is paused` });
+    if (chain.lag !== null && chain.lag > 2)
+      alerts.push({
+        severity: "warning",
+        message: `chain ${chain.chainId} is ${chain.lag} blocks behind`,
+      });
+  }
+  if (deliveries.dead_lettered > 0)
+    alerts.push({
+      severity: "critical",
+      message: `${deliveries.dead_lettered} dead-lettered delivery(ies) (run /dlq/replay)`,
+    });
+  const pendingCommands = Number(pendingRow?.c ?? 0);
+  if (pendingCommands > 0)
+    alerts.push({ severity: "warning", message: `${pendingCommands} pending scanner command(s)` });
+
+  return {
+    chains,
+    deliveries,
+    observations: {
+      observed: count(obs?.results ?? [], "observed"),
+      reverted: count(obs?.results ?? [], "reverted"),
+    },
+    pendingCommands,
+    alerts,
+  };
 }
 
 /** Sets the activation boundary on active subscriptions that don't have one yet. */

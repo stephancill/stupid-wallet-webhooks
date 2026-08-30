@@ -11,6 +11,7 @@ import {
   upsertObservation,
   markBlockRevertedAndList,
   listEligibleSubscriptions,
+  setChainHead,
 } from "../db/repository";
 import { resolveChain } from "../rpc/chain";
 import {
@@ -107,6 +108,9 @@ export class ScannerShard {
       await this.schedule(MIN_POLL_INTERVAL_MS);
       return;
     }
+    await setChainHead(this.db, chainId, Number(head)).catch(() => {
+      /* best-effort */
+    });
 
     const chain = await getChainRegistry(this.db, chainId);
     if (chain?.status === "paused") {

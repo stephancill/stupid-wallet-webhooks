@@ -30,6 +30,16 @@ Milestone working notes for the EVM Address Notifications worker.
 - Full metrics suite + DLQ replay tooling and the restart/timeout/deep-reorg
   failure injections still require a controlled test environment.
 
+### Observability (added after M4)
+
+- `chain_registry.last_head_block` (migration `0002`) records the observed head
+  so per-chain **lag** (head − cursor) is computable.
+- `GET /operator/metrics` returns per-chain status + lag, delivery/observation
+  counters, pending commands, and an **alert set** (degraded/paused chains,
+  chain behind >2 blocks, dead-lettered deliveries, pending reconciliation).
+- `GET /operator/chains/:chainId` returns per-chain lag detail.
+- The scanner records the observed head each poll.
+
 ## Milestone 3 — Fanout and Webhook Delivery
 
 Implemented from `docs/implementation-plan.md` §Milestone 3 and §Webhook Delivery.

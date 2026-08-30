@@ -290,10 +290,19 @@ operator.post("/dlq/replay", async (c) => {
   return c.json({ replayed: queued.length });
 });
 
-// Aggregate delivery/scanning health metrics for operators.
+// Aggregate delivery/chain health, per-chain lag, and alerts for operators.
 operator.get("/metrics", async (c) => {
-  const { metricsSummary } = await import("../db/repository");
-  return c.json(await metricsSummary(c.env.DB));
+  const { observeSummary } = await import("../db/repository");
+  return c.json(await observeSummary(c.env.DB));
+});
+
+// Chain detail with lag for operators.
+operator.get("/chains/:chainId", async (c) => {
+  const chainId = Number(c.req.param("chainId"));
+  const { observeSummary } = await import("../db/repository");
+  const summary = await observeSummary(c.env.DB);
+  const chain = summary.chains.find((ch) => ch.chainId === chainId);
+  return c.json(chain ?? { chainId, notFound: true });
 });
 
 function serializeAccount(account: {

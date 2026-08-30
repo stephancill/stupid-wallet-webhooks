@@ -55,7 +55,16 @@ bun scripts/operator.mts ops
 | GET    | `/v1/chains/:id`             | Chain metadata + product status                           |
 | POST   | `/v1/chains/:id/retry`       | Manual capability retry (needs an unsupported sub)        |
 
-Operator endpoints live under `/operator` with `Authorization: Bearer <operator-secret>`.
+Operator endpoints live under `/operator` with `Authorization: Bearer <operator-secret>`:
+
+```
+GET  /operator/metrics           # chain lag, counters, and alerts
+POST /operator/dlq/replay          # re-enqueue dead-lettered webhook deliveries
+GET  /operator/chains              # per-chain status/cursor summary
+GET  /operator/chains/:chainId      # one chain incl. lag
+POST /operator/chains/:id/pause|/resume
+GET  /operator/scanner-operations  # pending scanner commands
+```
 
 ## Queues (M3)
 
