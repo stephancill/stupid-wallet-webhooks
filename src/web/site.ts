@@ -71,9 +71,21 @@ GET  /v1/webhook-deliveries</code></pre>
   no self-serve signup. For access or support, contact
   <a target="_blank" href="mailto:hi@stupidtech.net">hi@stupidtech.net</a>.</p>
 
+  <h2>Skills</h2>
+  <p>Agent-ready skills for this product live in the repo:</p>
+  <ul>
+    <li><a target="_blank" href="https://github.com/stephancill/stupid-wallet-webhooks/tree/main/skills/operator">operator</a>
+      — run the live service: provisioning, health/lag, pause/resume, DLQ replay, deploy, metrics.</li>
+    <li><a target="_blank" href="https://github.com/stephancill/stupid-wallet-webhooks/tree/main/skills/subscriber">subscriber</a>
+      — set up webhooks, subscribe addresses, and verify signed deliveries.</li>
+  </ul>
+
   <p>
-    Part of <a target="_blank" href="https://stupidtech.net">Stupid Technology</a>.
-    Uses <a target="_blank" href="https://evm.stupidtech.net">evm.stupidtech.net</a> for chain access.
+    <a target="_blank" href="https://github.com/stephancill/stupid-wallet-webhooks">github</a>
+    -
+    <a target="_blank" href="https://x.com/stephancill">twitter</a>
+    -
+    <a target="_blank" href="https://stupidtech.net">stupidtech.net</a>
   </p>
 </body>
 </html>`;
