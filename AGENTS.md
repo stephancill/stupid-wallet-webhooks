@@ -1,4 +1,4 @@
-# Agent Notes — Stupid Wallet Notifications
+# Agent Notes — Stupid Wallet Webhooks
 
 Multi-tenant service that sends signed webhooks for EVM address activity
 (top-level transactions, native value, ERC-20, ERC-721). See

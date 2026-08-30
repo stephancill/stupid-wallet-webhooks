@@ -1,6 +1,6 @@
 # Implementation Notes
 
-Milestone working notes for the Stupid Wallet Notifications worker.
+Milestone working notes for the Stupid Wallet Webhooks worker.
 
 ## Milestone 5 — Production deployment & pilot (in progress)
 

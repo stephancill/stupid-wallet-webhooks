@@ -1,4 +1,4 @@
-# Stupid Wallet Notifications
+# Stupid Wallet Webhooks
 
 ## Product Definition
 
@@ -58,7 +58,7 @@ The MVP is complete when it can:
 API client
     |
     v
-Stupid Wallet Notifications Worker
+Stupid Wallet Webhooks Worker
     |-- D1: accounts, API keys, webhooks, subscriptions, delivery ledger
     |-- Scanner shard Durable Objects: active chains, tracked sets, cursors
     |

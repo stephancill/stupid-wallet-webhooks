@@ -1,5 +1,5 @@
 {
-  "name": "stupid-wallet-notifications",
+  "name": "stupid-wallet-webhooks",
   "version": "0.1.0",
   "private": true,
   "license": "MIT",
