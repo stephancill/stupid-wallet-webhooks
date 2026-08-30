@@ -366,10 +366,13 @@ Milestone 5 section above). Still open:
   Cloudflare consumer wake cadence, which is acceptable for the pilot. A
   single-hop fast path or lower-latency queue regime remains documented as the
   lever if a future tier needs reliably sub-10s delivery.
-- **`workers_dev=true` → custom domain/route** and optional auth/TLS rules for
-  hardening (still on the ephemeral `*.workers.dev` host).
-- **A bound-Worker test** proving the scanner never uses rpc-racer's public
-  budget (documented; not yet wired).
+- **Custom domain / hardening** ✅ — served on `https://wallet-webhooks.stupidtech.net`
+  and `workers.dev` is **disabled**; the ephemeral host is retired. Optional
+  edge-auth/TLS rules remain an nicety.
+- **Bound-Worker test** ✅ (`test/rpc-bound.test.ts`) — asserts the scanner's RPC
+  client hits only rpc-racer's private `/internal/v1/…` route (with
+  `x-internal-secret`) whenever `RPC_INTERNAL_SECRET` is configured, and never a
+  public `/v1/…` endpoint. Suite now 47 tests.
 - **Per-attempt delivery timing / distributed tracing** for exact send-time
   measurement beyond the timestamp-based p95 approximation.
 - **Local dev queue round-trip** can't run (miniflare doesn't loop produced

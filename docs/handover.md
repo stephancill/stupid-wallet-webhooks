@@ -126,8 +126,9 @@ Status as of this pass (most items done — see `docs/implementation-notes.md`):
    in-design tuning the observed p95 is acceptably **~10s**; the residual
    observe→attempt cost is the two-queue consumer wake cadence (a single-hop
    fast path remains documented if a future tier needs reliably sub-10s).
-5. **Optional hardening** — ⏳ `workers_dev=true` still in use; custom domain/route,
-   auth/TLS rules, and a bound-Worker test remain.
+5. **Optional hardening** — ✅ custom domain `https://wallet-webhooks.stupidtech.net`
+   (workers.dev disabled) and ✅ a bound-Worker test proving the scanner never uses
+   the public rpc-racer budget. Only an optional edge auth/TLS nicety remains.
 6. **Retention cleanup** — ✅ scheduled job now deletes 30-day delivery rows and
    7-day observations (wired in the 5-min cron).
 
