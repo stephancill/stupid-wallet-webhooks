@@ -19,7 +19,7 @@ Cloudflare Workers · Hono · D1 · Durable Objects · Queues (later) · Zod · 
 ```bash
 bun install
 cp .dev.vars.example .dev.vars   # edit secrets
-bun run db:migrate:local          # apply migrations + patch a local wrangler bug
+bun run db:migrate:local          # apply migrations
 bun run dev                       # wrangler dev --local on :8787
 ```
 

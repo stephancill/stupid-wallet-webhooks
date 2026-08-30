@@ -8,7 +8,7 @@
     "dev": "wrangler dev --local",
     "deploy": "wrangler deploy",
     "db:migrate": "wrangler d1 migrations apply address-notifications-db",
-    "db:migrate:local": "wrangler d1 migrations apply address-notifications-db --local && bun scripts/fix-local.mts",
+    "db:migrate:local": "wrangler d1 migrations apply address-notifications-db --local",
     "op": "bun scripts/operator.mts",
     "test": "bun test",
     "lint": "bunx oxlint src scripts test",
@@ -25,6 +25,6 @@
     "@cloudflare/workers-types": "^4.20260417.0",
     "@types/bun": "^1.4.0",
     "typescript": "^5.8.3",
-    "wrangler": "4.125.0"
+    "wrangler": "4.126.0"
   }
 }

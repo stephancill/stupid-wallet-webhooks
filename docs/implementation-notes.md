@@ -117,30 +117,21 @@ create account → provision API key → create webhook → multi-chain subscrib
 (`[1, 8453]`) → both `active` → duplicate tuple returns `conflict` → list →
 delete (`deleting`) → re-subscribe the same tuple succeeds.
 
-## Known wrangler-dev bug (local only) and workaround
+## Wrangler local-dev bug — resolved by upgrade
 
-`wrangler dev --local` intermittently crashes at boot with:
+Wrangler `4.125.0` bundled a workerd whose local `_cf_ALARM` alarm-table handling
+could boot-crash `wrangler dev --local` (particularly after
+`wrangler d1 migrations apply --local`), leaving a mixed 2/3-column `_cf_ALARM`
+and failing with `table _cf_ALARM has 3 columns but 2 values were supplied`.
+This was fixed upstream in workerd (STOR-5374 / issue #6850), which is bundled
+in Wrangler `4.126.0`+.
 
-```
-Fatal uncaught kj::Exception: workerd/util/sqlite.c++:842:
-SENTRY_DO SQLite failed; ... table _cf_ALARM has 3 columns but 2 values
-were supplied: SQLITE_ERROR
-```
-
-- `SENTRY_DO` is workerd's prefix for Durable Object SQLite errors
-  (cloudflare/workerd#7150).
-- The base `_cf_ALARM` schema is 2 columns (`actor_id`, `scheduled_time`); the
-  third `actor_name` column comes from workerd's alarm-name design
-  (cloudflare/workerd#6850). When the local `_cf_ALARM` has that third column,
-  workerd inserts only 2 values and aborts.
-- We reproduced it and confirmed causation by adding the `actor_name` column to a
-  local `metadata.sqlite` and watching `wrangler dev` crash. The poisoned
-  3-column table commonly appears after `wrangler d1 migrations apply --local`.
-- It is a **local dev runtime issue; production is unaffected** and unrelated to
-  any of our code.
-- Workaround: `scripts/fix-local.mts` deletes only the poisoned
-  `metadata.sqlite` (the real D1 `*.sqlite` is preserved). It runs automatically
-  after `db:migrate:local`.
+- Verified: on Wrangler `4.126.0`, wiping `.wrangler`, running all `d1
+  migrations apply --local`, and booting `wrangler dev --local` succeeded twice
+  in a row (previously this exact sequence crashed on 4.125.0). The old
+  `scripts/fix-local.mts` workaround was removed; `db:migrate:local` is now the
+  plain migration command.
+- The bug is local-dev-only; production is unaffected.
 
 ## Open items / next steps
 
@@ -148,6 +139,6 @@ were supplied: SQLITE_ERROR
 - Move test delivery + delivery retries to the queue-based consumer in
   Milestone 3 (signing/retry-classification pattern already in
   `src/api/queues/webhookClient.ts`).
-- Revisit a wrangler upgrade once a fix for the local `_cf_ALARM` bug is
-  confirmed (bun's `minimum-release-age` currently blocks installing wrangler
-  > 4.125.0).
+- Wrangler is pinned to `4.126.0` (newest installable under bun's
+  `minimum-release-age`); note that `4.127.1` remains blocked until it is old
+  enough. The `scripts/fix-local.mts` workaround was removed.

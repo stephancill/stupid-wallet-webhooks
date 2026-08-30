@@ -51,11 +51,7 @@ Multi-tenant service that sends signed webhooks for EVM address activity
 - `bun install`, `cp .dev.vars.example .dev.vars`, `bun run db:migrate:local`,
   then `bun run dev`.
 - Operator provisioning: `bun scripts/operator.mts` (see README).
-- Known local-only wrangler-dev bug: `wrangler d1 migrations apply --local` can
-  leave a 3-column `_cf_ALARM` that crashes `wrangler dev` at boot
-  ("table _cf_ALARM has 3 columns but 2 values"). `db:migrate:local` runs
-  `scripts/fix-local.mts` to remove the poisoned metadata. Do not "fix" this in
-  a way that changes production deployments — it is a local runtime issue.
+- Requires Wrangler >= `4.126.0` (fixes a local `wrangler dev --local` crash).
 
 ## Git
 
