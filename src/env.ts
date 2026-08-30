@@ -7,6 +7,8 @@ export type Env = {
 
   ALLOW_INSECURE_TEST_WEBHOOKS?: string;
   RPC_RACER_BASE_URL: string;
+  RPC_INTERNAL_SECRET?: string;
+  RPC_SCANNER_FANOUT?: string;
   SCANNER_SHARD_COUNT: string;
   SUBSCRIPTION_DEFAULT_QUOTA: string;
   CHAIN_DEFAULT_QUOTA: string;

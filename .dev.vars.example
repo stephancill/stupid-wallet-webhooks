@@ -3,3 +3,6 @@ API_KEY_PEPPER=change-me
 WEBHOOK_SIGNING_MASTER=change-me
 # Local-only: set to 1 to allow loopback webhook URLs for integration tests.
 ALLOW_INSECURE_TEST_WEBHOOKS=0
+# If set, the scanner uses rpc-racer's private /internal route (low fan-out).
+RPC_INTERNAL_SECRET=
+RPC_SCANNER_FANOUT=2

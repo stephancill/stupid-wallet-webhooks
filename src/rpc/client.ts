@@ -25,14 +25,27 @@ const BASE_TIMEOUT_MS = 5_000;
 /**
  * Resolves where a JSON-RPC call should be sent. `RPC_DIRECT_URL` (set by the
  * fork/integration test or a scanner override) sends plain JSON-RPC and ignores
- * the chain selector; otherwise we use the rpc-racer ` /v1/:chainId` proxy path.
+ * the chain selector; otherwise we use the rpc-racer path. When the internal
+ * scanner config is enabled (shared secret + low fan-out) we target rpc-racer's
+ * `/internal/v1/:chainId` route, which bypasses the public per-IP rate limit.
  */
+type InternalRpcConfig = { secret: string; fanout: number };
+let internalRpc: InternalRpcConfig | null = null;
+
+export function setInternalRpc(config: InternalRpcConfig | null): void {
+  internalRpc = config;
+}
+
 function ENDPOINT({ baseUrl, chainId }: { baseUrl: string; chainId: number | string }): string {
   const direct = process.env.RPC_DIRECT_URL;
   if (typeof direct === "string" && direct.trim().length > 0) {
     return direct.trim().replace(/\/$/, "");
   }
-  return `${baseUrl.replace(/\/$/, "")}/v1/${chainId}`;
+  const base = baseUrl.replace(/\/$/, "");
+  if (internalRpc !== null) {
+    return `${base}/internal/v1/${chainId}?fanoutCount=${internalRpc.fanout}`;
+  }
+  return `${base}/v1/${chainId}`;
 }
 
 export async function jsonRpc<T>({
@@ -62,9 +75,13 @@ export async function jsonRpc<T>({
     const timeout = setTimeout(() => controller.abort("RPC timeout"), timeoutMs);
     try {
       const endpoint = ENDPOINT({ baseUrl, chainId });
+      const headers: Record<string, string> = { "content-type": "application/json" };
+      if (internalRpc !== null && internalRpc.secret !== "") {
+        headers["x-internal-secret"] = internalRpc.secret;
+      }
       const response = await fetch(endpoint, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers,
         body: JSON.stringify({ jsonrpc: "2.0", method, params, id }),
         signal: controller.signal,
       });

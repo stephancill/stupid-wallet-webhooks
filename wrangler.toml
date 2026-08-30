@@ -45,9 +45,12 @@ dead_letter_queue = "webhook-delivery-dlq"
 
 [vars]
 RPC_RACER_BASE_URL = "https://evm.stupidtech.net"
+RPC_SCANNER_FANOUT = "2"
 SCANNER_SHARD_COUNT = "2"
 SUBSCRIPTION_DEFAULT_QUOTA = "1000"
 CHAIN_DEFAULT_QUOTA = "20"
+# RPC_INTERNAL_SECRET must be set as a secret (not here) for the scanner to use
+# rpc-racer's private /internal route with low fan-out.
 
 
 [triggers]

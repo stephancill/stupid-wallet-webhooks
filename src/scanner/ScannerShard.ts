@@ -19,6 +19,7 @@ import {
   ethGetBlockByNumber,
   ethGetLogs,
   ethGetTransactionReceipt,
+  setInternalRpc,
 } from "../rpc/client";
 import { analyzeBlock, finalizeBundles, observationData } from "../domain/activity";
 import { classifyChain, pushWindow, pruneTo, type HeldBlock } from "../domain/reorg";
@@ -94,6 +95,13 @@ export class ScannerShard {
   // -------------------------------------------------------------------------
 
   private async scanChain(chainId: number): Promise<void> {
+    // Use rpc-racer's private path (bypasses the public rate limit) when we have
+    // the shared secret configured; otherwise fall back to the public feed.
+    const secret = this.env.RPC_INTERNAL_SECRET?.trim();
+    if (secret) {
+      const fanout = Number.parseInt(this.env.RPC_SCANNER_FANOUT ?? "2", 10);
+      setInternalRpc({ secret, fanout: Number.isFinite(fanout) && fanout > 0 ? fanout : 2 });
+    }
     const tracked = await listTrackedAddressesForChain(this.db, chainId);
     if (tracked.length === 0) {
       await this.schedule(30_000);
