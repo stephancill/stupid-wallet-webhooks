@@ -1,4 +1,4 @@
-# Handover — EVM Address Notifications
+# Handover — Stupid Wallet Notifications
 
 Operator and maintainer handover. Product spec in `docs/implementation-plan.md`;
 build notes in `docs/implementation-notes.md`.

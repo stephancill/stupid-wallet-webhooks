@@ -1,6 +1,6 @@
 # Implementation Notes
 
-Milestone working notes for the EVM Address Notifications worker.
+Milestone working notes for the Stupid Wallet Notifications worker.
 
 ## Milestone 5 — Production deployment & pilot (in progress)
 

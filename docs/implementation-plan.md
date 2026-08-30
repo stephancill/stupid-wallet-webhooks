@@ -1,4 +1,4 @@
-# EVM Address Notifications
+# Stupid Wallet Notifications
 
 ## Product Definition
 
@@ -58,7 +58,7 @@ The MVP is complete when it can:
 API client
     |
     v
-Address Notifications Worker
+Stupid Wallet Notifications Worker
     |-- D1: accounts, API keys, webhooks, subscriptions, delivery ledger
     |-- Scanner shard Durable Objects: active chains, tracked sets, cursors
     |
