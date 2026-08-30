@@ -12,6 +12,7 @@ export type Env = {
   SCANNER_SHARD_COUNT: string;
   SUBSCRIPTION_DEFAULT_QUOTA: string;
   CHAIN_DEFAULT_QUOTA: string;
+  DELIVERY_LATENCY_ALERT_MS?: string;
   OPERATOR_SECRET: string;
   API_KEY_PEPPER: string;
   WEBHOOK_SIGNING_MASTER: string;

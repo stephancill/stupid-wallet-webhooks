@@ -968,8 +968,78 @@ export async function setChainHead(
     .run();
 }
 
+/** Pure percentile bucketing for latency samples (used by deliveryLatencyStats). */
+export function computeLatencyPercentiles(samples: number[]): {
+  eligibleCount: number;
+  p50Ms: number | null;
+  p95Ms: number | null;
+  p99Ms: number | null;
+} {
+  const latencies = samples.filter((ms) => Number.isFinite(ms) && ms >= 0).sort((a, b) => a - b);
+  if (latencies.length === 0) {
+    return { eligibleCount: 0, p50Ms: null, p95Ms: null, p99Ms: null };
+  }
+  const percentile = (ratio: number): number =>
+    latencies[Math.min(latencies.length - 1, Math.floor(ratio * latencies.length))];
+  return {
+    eligibleCount: latencies.length,
+    p50Ms: percentile(0.5),
+    p95Ms: percentile(0.95),
+    p99Ms: percentile(0.99),
+  };
+}
+
+/** Computes the observed-to-delivered p95/p99 for successful activity deliveries. */
+export async function deliveryLatencyStats(db: D1Database): Promise<{
+  eligibleCount: number;
+  p50Ms: number | null;
+  p95Ms: number | null;
+  p99Ms: number | null;
+}> {
+  // Restrict to the last 24h so latency reflects current health, not history.
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const { results } = await db
+    .prepare(
+      `SELECT wd.updated_at AS updated_at, obs.created_at AS observed_at
+       FROM webhook_deliveries wd
+       JOIN activity_observations obs ON obs.id = wd.event_id
+       WHERE wd.event_type = 'activity.observed'
+         AND wd.status = 'success'
+         AND wd.updated_at >= ?`,
+    )
+    .bind(since)
+    .all<{ updated_at: string; observed_at: string }>();
+  const samples = results.map((row) => Date.parse(row.updated_at) - Date.parse(row.observed_at));
+  return computeLatencyPercentiles(samples);
+}
+
+/** Deletes retained rows past their documented retention (7d obs, 30d deliveries). */
+export async function runRetentionCleanup(db: D1Database): Promise<{
+  observationsDeleted: number;
+  deliveriesDeleted: number;
+}> {
+  const now = Date.now();
+  const obsCutoff = new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const delCutoff = new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString();
+  const obs = await db
+    .prepare("DELETE FROM activity_observations WHERE created_at < ?")
+    .bind(obsCutoff)
+    .run();
+  const del = await db
+    .prepare("DELETE FROM webhook_deliveries WHERE created_at < ?")
+    .bind(delCutoff)
+    .run();
+  return {
+    observationsDeleted: obs.meta.changes ?? 0,
+    deliveriesDeleted: del.meta.changes ?? 0,
+  };
+}
+
 /** Computes per-chain lag plus a set of alerts for the operator surface. */
-export async function observeSummary(db: D1Database): Promise<{
+export async function observeSummary(
+  db: D1Database,
+  options: { latencyAlertMs?: number } = {},
+): Promise<{
   chains: Array<{
     chainId: number;
     status: string;
@@ -980,10 +1050,16 @@ export async function observeSummary(db: D1Database): Promise<{
   }>;
   deliveries: { pending: number; success: number; failed: number; dead_lettered: number };
   observations: { observed: number; reverted: number };
+  deliveryLatency: {
+    eligibleCount: number;
+    p50Ms: number | null;
+    p95Ms: number | null;
+    p99Ms: number | null;
+  };
   pendingCommands: number;
   alerts: Array<{ severity: string; message: string }>;
 }> {
-  const [rows, del, obs, pendingRow] = await Promise.all([
+  const [rows, del, obs, pendingRow, latency] = await Promise.all([
     listChainRegistry(db),
     db
       .prepare("SELECT status, COUNT(*) AS c FROM webhook_deliveries GROUP BY status")
@@ -994,6 +1070,7 @@ export async function observeSummary(db: D1Database): Promise<{
     db
       .prepare("SELECT COUNT(*) AS c FROM scanner_operations WHERE status = 'pending'")
       .first<{ c: number }>(),
+    deliveryLatencyStats(db),
   ]);
 
   const lag = (cursor: number | null, head: number | null): number | null =>
@@ -1041,12 +1118,29 @@ export async function observeSummary(db: D1Database): Promise<{
   if (pendingCommands > 0)
     alerts.push({ severity: "warning", message: `${pendingCommands} pending scanner command(s)` });
 
+  // Alert when successful observed→delivered p95 degrades, once we have enough
+  // samples in the window to be meaningful. Threshold defaults to 10s and can be
+  // tuned via DELIVERY_LATENCY_ALERT_MS.
+  const latencyAlertMs = options.latencyAlertMs ?? 10_000;
+  if (latency.eligibleCount >= 5 && latency.p95Ms !== null && latency.p95Ms > latencyAlertMs) {
+    alerts.push({
+      severity: "warning",
+      message: `observed→delivered p95 ${latency.p95Ms}ms exceeds ${latencyAlertMs}ms (${latency.eligibleCount} deliveries)`,
+    });
+  }
+
   return {
     chains,
     deliveries,
     observations: {
       observed: count(obs?.results ?? [], "observed"),
       reverted: count(obs?.results ?? [], "reverted"),
+    },
+    deliveryLatency: {
+      eligibleCount: latency.eligibleCount,
+      p50Ms: latency.p50Ms,
+      p95Ms: latency.p95Ms,
+      p99Ms: latency.p99Ms,
     },
     pendingCommands,
     alerts,

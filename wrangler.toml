@@ -47,6 +47,8 @@ RPC_SCANNER_FANOUT = "5"
 SCANNER_SHARD_COUNT = "2"
 SUBSCRIPTION_DEFAULT_QUOTA = "1000"
 CHAIN_DEFAULT_QUOTA = "20"
+# Delivery-latency alert threshold in ms (observed→delivered p95). Default 10000.
+DELIVERY_LATENCY_ALERT_MS = "10000"
 # RPC_INTERNAL_SECRET must be set as a secret (not here) for the scanner to use
 # rpc-racer's private /internal route with low fan-out.
 

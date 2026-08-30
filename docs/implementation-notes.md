@@ -49,6 +49,55 @@ Milestone working notes for the EVM Address Notifications worker.
 - `POST /operator/dlq/replay`,
 - `GET /operator/metrics` (lag + alerts), `GET /operator/chains[/:chainId]`.
 
+### Pilot completion (this pass)
+
+- **More target chains live**: real subscriptions created for the test wallet on
+  Base (8453), Optimism (10), and Arbitrum (42161) (mainnet already live). All
+  verified `active` with cursors advancing and the activation boundary
+  (`active_from_block = head + 1`) set by the scanner.
+- **End-to-end `activity.observed` validated**: funded the test wallet on Base
+  (`0xA0BFe1A0fc5B83d784e8599EfdED93655158E405`), subscribed it, sent a signed
+  value transfer via `cast`, and confirmed the scanner produced an observation,
+  the fan-out enqueued a delivery, the webhook was delivered with a **valid
+  HMAC-SHA256 signature** (verified against the webhook's signing secret), and
+  the ledger recorded `success` (HTTP 200). Also observed a second, independent
+  delivery: an inbound ERC-20 transfer to the wallet on Optimism.
+- **Retention cleanup wired** (`src/db/repository.ts`, `runRetentionCleanup`):
+  the scheduled handler now deletes `activity_observations` (>7d) and
+  `webhook_deliveries` (>30d) every 5 minutes alongside reconciliation.
+- **Delivery-latency alerting added**: `observeSummary` now computes an
+  observed→delivered `deliveryLatency` block (p50/p95/p99) over successful
+  `activity.observed` deliveries in the last 24h (joined back to the observation
+  `created_at`) and raises a warning when measured p95 exceeds
+  `DELIVERY_LATENCY_ALERT_MS` (default 10s) with ≥5 samples. Percentile
+  computation extracted as a pure, unit-tested helper
+  (`computeLatencyPercentiles`, `test/retention.test.ts`). Suite now 43 tests.
+- **Quotas verified live**: operator overrides on both dimensions behave
+  correctly — a `subscriptionQuota:1` account accepted exactly one and rejected
+  the rest (`"quota": active subscription quota exceeded`); a `chainQuota:1`
+  account rejected a second distinct chain
+  (`"quota": distinct chain quota exceeded`). Defaults (1,000 / 20) remain in
+  effect for override-free accounts.
+
+### Feedback from the live run
+
+- **Observed→delivered p95 ≈ 19.6s** across the two validated deliveries — above
+  the 10s pilot target. This is dominated by scanner poll cadence + queue polling
+  latency, not signing/fan-out cost. Worth tightening poll intervals or delivery
+  concurrency as the pilot accumulates samples.
+- **Arbitrum momentarily fell ~40 blocks behind** right after activation (its
+  activation backfilled from the head and fast block cadence). It recovers by
+  cursor advancement; keep an eye on lag in `/operator/metrics`.
+
+### Local webhook receiver + tunnel (test tooling)
+
+- `scripts/webhook-receiver.mts`: a Bun HTTP receiver that logs every request
+  (headers incl. `webhook-id/timestamp/signature`, body) to a JSONL file
+  (`CAPTURE_FILE`) for verifying signed webhooks locally.
+- Pair it with a `cloudflared tunnel --url http://localhost:8799` quick tunnel to
+  give the live worker a real HTTPS endpoint that backhauls to the local
+  listener during pilot validation.
+
 ## Milestone 4 — Reorgs and Operations
 
 ### What shipped
@@ -269,17 +318,20 @@ migrations apply --local`, and booting `wrangler dev --local` succeeded twice
 
 ## Open items / next steps
 
-See `docs/handover.md` for the full operator handover. Immediate items:
+See `docs/handover.md` for the full operator handover. This pass completed the
+pilot's chain coverage, end-to-end webhook validation, retention cleanup, and
+delivery-latency alerting (all detailed under the Milestone 5 section above).
+Still open:
 
-- **Pilot chain coverage**: subscribe Base (8453), Optimism (10), Arbitrum (42161)
-  in addition to the mainnet chain already live.
-- **Observe a real `activity.observed` webhook** end-to-end (needs a tracked
-  address to transact on one of the live chains).
-- **Enforce quotas**: defaults are in place (1,000 subscriptions / 20 chains);
-  add operator overrides / rate-limit enforcement for the pilot if desired.
-- **Delivery p95 latency / lag alerting**: `GET /operator/metrics` surfaces
-  lag + dead-letters; true observed→delivered latency p95 needs distributed
-  tracing or a per-delivery timing metric, still to add.
+- **Delivery-latency target**: bring observed→delivered p95 under the 10s pilot
+  target (currently ~19.6s); likely tightening scanner poll cadence or delivery
+  concurrency as samples accumulate.
+- **`workers_dev=true` → custom domain/route** and optional auth/TLS rules for
+  hardening (still on the ephemeral `*.workers.dev` host).
+- **A bound-Worker test** proving the scanner never uses rpc-racer's public
+  budget (documented; not yet wired).
+- **Per-attempt delivery timing / distributed tracing** for exact send-time
+  measurement beyond the timestamp-based p95 approximation.
 - **Local dev queue round-trip** can't run (miniflare doesn't loop produced
   messages to a worker's own `queue()` consumer); verified empirically — not a
   defect.

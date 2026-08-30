@@ -108,23 +108,25 @@ With `RPC_INTERNAL_SECRET` set, the scanner calls
 now falls back to **Alchemy** on rate-limit/CU-degraded upstreams, so unkeyed
 public quotas don't stall scanning.
 
-## Remaining steps (the not-yet-done pilot work)
+## Remaining steps (pilot work)
 
-1. **Subscribe more target chains** — create real subscriptions on Base (8453),
-   Optimism (10), and Arbitrum (42161) (mainnet already live).
-2. **Validate an `activity.observed` webhook end-to-end** — have a tracked
-   address transact (or wait for activity) on a live chain, then confirm the
-   signed delivery through `/v1/webhook-deliveries`.
-3. **Enforce quotas for the pilot** — default 1,000 subscriptions / 20 chains;
-   add operator overrides and account API rate limiting if required.
-4. **Delivery-latency alerting** — `GET /operator/metrics` covers lag/dead-
-   letters; a true observed→delivered p95 needs per-delivery timing or
-   distributed tracing (add later).
-5. **Optional hardening** — move off `workers_dev=true` to a custom domain/route;
-   add auth/TLS rules; consider a bound-Worker test proving it never uses the
-   public rpc-racer budget.
-6. **Retention cleanup** — 30-day delivery rows / 7-day observations are
-   documented but a cleanup (scheduled) job is not yet wired.
+Status as of this pass (most items done — see `docs/implementation-notes.md`):
+
+1. **Subscribe more target chains** — ✅ Base (8453), Optimism (10), Arbitrum (42161)
+   subscribed and `active` (mainnet already live).
+2. **Validate an `activity.observed` webhook end-to-end** — ✅ funded test wallet
+   on Base, transacted from it via `cast`, confirmed the signed delivery through
+   `/v1/webhook-deliveries`, and verified the HMAC-SHA256 signature cryptographically
+   (delivered via a local receiver + `cloudflared` quick tunnel).
+3. **Enforce quotas for the pilot** — ✅ verified live: default 1,000/20 plus
+   operator overrides for both subscription and chain quotas both enforced.
+4. **Delivery-latency alerting** — ✅ `deliveryLatency` (p50/95/99) added to
+   `/operator/metrics` with a p95 alert (`DELIVERY_LATENCY_ALERT_MS`, default 10s).
+   Live p95 ≈ 19.6s is above target — still tuning.
+5. **Optional hardening** — ⏳ `workers_dev=true` still in use; custom domain/route,
+   auth/TLS rules, and a bound-Worker test remain.
+6. **Retention cleanup** — ✅ scheduled job now deletes 30-day delivery rows and
+   7-day observations (wired in the 5-min cron).
 
 ## Gotchas
 

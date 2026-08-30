@@ -307,7 +307,13 @@ operator.post(
 // Aggregate delivery/chain health, per-chain lag, and alerts for operators.
 operator.get("/metrics", async (c) => {
   const { observeSummary } = await import("../db/repository");
-  return c.json(await observeSummary(c.env.DB));
+  const latencyAlertMs = Number.parseInt(c.env.DELIVERY_LATENCY_ALERT_MS ?? "10000", 10);
+  return c.json(
+    await observeSummary(c.env.DB, {
+      latencyAlertMs:
+        Number.isFinite(latencyAlertMs) && latencyAlertMs > 0 ? latencyAlertMs : 10000,
+    }),
+  );
 });
 
 // Chain detail with lag for operators.
