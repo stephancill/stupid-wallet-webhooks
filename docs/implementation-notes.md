@@ -2,6 +2,53 @@
 
 Milestone working notes for the EVM Address Notifications worker.
 
+## Milestone 5 — Production deployment & pilot (in progress)
+
+### Deployed resources (Cloudflare)
+
+- Worker: `address-notifications` → **https://address-notifications.stephan-cloudflare.workers.dev**
+- D1: `address-notifications-db` (`abb46259-a808-4350-bc3c-cbd8201f85ef`), migrations `0001`+`0002` applied remotely
+- Queues: `matched-activity`, `webhook-delivery`, `webhook-delivery-dlq`
+- Durable Objects: `ScannerShard` (`SCANNER_SHARD_1`, `SCANNER_SHARD_2`)
+- Vars: `RPC_RACER_BASE_URL`, `RPC_SCANNER_FANOUT=5`, shard/quota defaults
+- Secrets set: `OPERATOR_SECRET`, `API_KEY_PEPPER`, `WEBHOOK_SIGNING_MASTER`,
+  `RPC_INTERNAL_SECRET` (shared with rpc-racer's `INTERNAL_SECRET`)
+- Cron: reconciliation every 5 minutes
+- `workers_dev = true` (public URL for the pilot)
+
+### rpc-racer Milestone-0 support (live)
+
+- `POST /internal/v1/:chain` — service-bound route, gate by `x-internal-secret`
+  equal to `INTERNAL_SECRET` (bypasses the public rate limit)
+- `fanoutCount` query param (`1..5`, default 5)
+- Caller-labelled metrics (`caller: public|internal`)
+- Consistency integration test (`scripts/integration-test.mjs`)
+- **Alchemy fallback now also triggers on rate-limit / CU-degraded upstreams**
+  (not just state-availability), so low/unkeyed public CUs are backstopped
+
+### Scanner now live on Ethereum mainnet
+
+- Verified: chain 1 `status=active`, `cursor`/`head` advancing, `lag=0`
+- The scanner uses the internal rpc-racer route with `fanoutCount=5` when
+  `RPC_INTERNAL_SECRET` is set.
+
+### Bugs found & fixed during deploy
+
+- **`process is not defined`**: `src/rpc/client.ts` read `process.env` in the
+  endpoint builder; workerd defines no `process`, so the deployed scanner threw
+  on every RPC. Guarded with `typeof process !== "undefined"` (only the bun
+  fork/integration path uses `RPC_DIRECT_URL`). This was the actual reason the
+  remote scanner never advanced its cursor.
+- Scanner `RPC_SCANNER_FANOUT` raised to 5 (at 2, the few sampled upstreams were
+  too often the ones being throttled/`525`).
+
+### Operator ops surface added
+
+- `POST /operator/chains/:chainId/scan` (out-of-band scan trigger),
+- `POST /operator/chains/:chainId/pause` / `/resume`,
+- `POST /operator/dlq/replay`,
+- `GET /operator/metrics` (lag + alerts), `GET /operator/chains[/:chainId]`.
+
 ## Milestone 4 — Reorgs and Operations
 
 ### What shipped
@@ -222,17 +269,17 @@ migrations apply --local`, and booting `wrangler dev --local` succeeded twice
 
 ## Open items / next steps
 
-- Milestone 4: reorgs (rolling block/observation window + `activity.reverted`),
-  chain-health metrics, retention cleanup + DLQ replay, and failure injections.
-- Local transport note: an exploratory local harness proved that miniflare's
-  local-dev runtime does **not** loop produced messages back into a worker's own
-  `queue()` consumer, so the matched→delivery→DLQ round-trip can't run under
-  `wrangler dev` (see M3 caveat). The deterministic parts — fan-out eligibility
-  (activation block), classification, and dedup — are extracted into pure,
-  unit-tested functions (`src/queues/plan.ts`, 5 tests).
-  - An operator-only `POST /operator/inject` (enabled only with
-    `ALLOW_INSECURE_TEST_WEBHOOKS=1`) writes an observation + enqueues to
-    `matched-activity`; on real Cloudflare Queues this completes the flow.
-- Wrangler is on `4.126.0` (includes the local `_cf_ALARM` fix). Under bun's
-  `minimum-release-age`, `4.127.1` is not yet installable; there is no remaining
-  `fix-local` workaround needed.
+See `docs/handover.md` for the full operator handover. Immediate items:
+
+- **Pilot chain coverage**: subscribe Base (8453), Optimism (10), Arbitrum (42161)
+  in addition to the mainnet chain already live.
+- **Observe a real `activity.observed` webhook** end-to-end (needs a tracked
+  address to transact on one of the live chains).
+- **Enforce quotas**: defaults are in place (1,000 subscriptions / 20 chains);
+  add operator overrides / rate-limit enforcement for the pilot if desired.
+- **Delivery p95 latency / lag alerting**: `GET /operator/metrics` surfaces
+  lag + dead-letters; true observed→delivered latency p95 needs distributed
+  tracing or a per-delivery timing metric, still to add.
+- **Local dev queue round-trip** can't run (miniflare doesn't loop produced
+  messages to a worker's own `queue()` consumer); verified empirically — not a
+  defect.
