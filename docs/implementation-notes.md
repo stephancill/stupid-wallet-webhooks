@@ -119,6 +119,14 @@ Milestone working notes for the EVM Address Notifications worker.
   single-queue delivery fast path (a real design tradeoff vs. the documented
   decoupling) — flagged for a decision.
 
+**In-design latency tuning (measured)**: raised the queue consumers'
+`max_concurrency` (5/8) and lowered `max_batch_timeout` (2s/3s). Fresh Base
+deliveries dropped from ~13–15s to ~9–11.5s `observeToAttempt` — a modest,
+noisy gain — but the ~8s per-hop Cloudflare Queue consumer wake is now the
+binding floor, so p95 in the two-queue design remains around (not comfortably
+under) 10s. Meaningfully sub-10s still needs either a single (fast) queue hop or
+a lower-latency queue-consumer regime.
+
 ### Local webhook receiver + tunnel (test tooling)
 
 - `scripts/webhook-receiver.mts`: a Bun HTTP receiver that logs every request
