@@ -1,7 +1,12 @@
 name = "address-notifications"
 main = "src/index.ts"
 compatibility_date = "2026-04-21"
-workers_dev = true
+workers_dev = false
+
+# Custom domain (wt: hosted on the same Cloudflare account).
+[[routes]]
+pattern = "wallet-webhooks.stupidtech.net"
+custom_domain = true
 
 [[d1_databases]]
 binding = "DB"

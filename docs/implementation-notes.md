@@ -6,7 +6,7 @@ Milestone working notes for the Stupid Wallet Webhooks worker.
 
 ### Deployed resources (Cloudflare)
 
-- Worker: `address-notifications` → **https://address-notifications.stephan-cloudflare.workers.dev**
+- Worker: `address-notifications` → **https://wallet-webhooks.stupidtech.net** (custom domain; workers.dev disabled)
 - D1: `address-notifications-db` (`abb46259-a808-4350-bc3c-cbd8201f85ef`), migrations `0001`+`0002` applied remotely
 - Queues: `matched-activity`, `webhook-delivery`, `webhook-delivery-dlq`
 - Durable Objects: `ScannerShard` (`SCANNER_SHARD_1`, `SCANNER_SHARD_2`)
@@ -14,7 +14,7 @@ Milestone working notes for the Stupid Wallet Webhooks worker.
 - Secrets set: `OPERATOR_SECRET`, `API_KEY_PEPPER`, `WEBHOOK_SIGNING_MASTER`,
   `RPC_INTERNAL_SECRET` (shared with rpc-racer's `INTERNAL_SECRET`)
 - Cron: reconciliation every 5 minutes
-- `workers_dev = true` (public URL for the pilot)
+- `workers_dev = false` on a custom domain `wallet-webhooks.stupidtech.net`
 
 ### rpc-racer Milestone-0 support (live)
 

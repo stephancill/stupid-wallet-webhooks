@@ -22,7 +22,7 @@ consumer → `webhook-delivery` → signed HTTP with retries and a DLQ.
 ## Live deployment
 
 - Worker: `address-notifications`
-- URL: `https://address-notifications.stephan-cloudflare.workers.dev`
+- URL: `https://wallet-webhooks.stupidtech.net`
 - D1: `address-notifications-db` (`abb46259-a808-4350-bc3c-cbd8201f85ef`)
 - Queues: `matched-activity`, `webhook-delivery`, `webhook-delivery-dlq`
 - Durable Objects: `ScannerShard` x2

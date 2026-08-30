@@ -53,6 +53,13 @@ Multi-tenant service that sends signed webhooks for EVM address activity
 - Operator provisioning: `bun scripts/operator.mts` (see README).
 - Requires Wrangler >= `4.126.0` (fixes a local `wrangler dev --local` crash).
 
+## Deployment
+
+- This repo is connected to Cloudflare for automatic deployments: pushing to
+  `main` deploys the Worker on the next pipeline run.
+- Live entry point: `https://wallet-webhooks.stupidtech.net` (workers.dev is
+  disabled / custom domain).
+
 ## Git
 
 - Conventional commits (e.g. `feat:`, `fix:`, `chore:`).
