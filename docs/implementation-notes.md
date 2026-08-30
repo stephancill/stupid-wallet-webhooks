@@ -44,7 +44,9 @@ or observe a rejected `webhook-delivery` retry, so the full queue round-trip is
 best exercised with a controlled chain (produce a matched message) plus a real
 receiver under Cloudflare/test harness. The pure boundaries (matching, signing,
 bodies, classification) are unit-tested; the delivery HTTP client classifies
-outcomes and was implemented in Milestone 1.
+outcomes. **The scanner+matching side is covered against a real chain by
+`scripts/fork-test.mts`** (Anvil fork of a target chain + funded test accounts),
+which drove the `RPC_DIRECT_URL` override in `src/rpc/client.ts`.
 
 --- Earlier milestones below ---
 

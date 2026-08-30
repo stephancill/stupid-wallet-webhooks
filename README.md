@@ -72,4 +72,14 @@ Operator endpoints live under `/operator` with `Authorization: Bearer <operator-
 bun run check    # lint + format
 bun test         # unit tests
 bunx tsc --noEmit
+
+# Real-chain integration: Anvil fork of a target chain + funded test accounts.
+# Requires `cast`/`anvil` (foundry) and optionally ALCHEMY_API_KEY to fork from
+# Alchemy (defaults to `evm.stupidtech.net` Base otherwise).
+bun run fork-test
+#   FORK_RPC_URL=... ANVIL_CHAIN_ID=8453 ANVIL_BLOCK_TIME=2 bun run fork-test
 ```
+
+The `fork-test` sparns an Anvil fork of a target chain, sends a signed value
+transfer from a tracked (prefunded) test account, and asserts the matcher turns
+that real transaction into an `activity.observed` observation.

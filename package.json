@@ -10,6 +10,7 @@
     "db:migrate": "wrangler d1 migrations apply address-notifications-db",
     "db:migrate:local": "wrangler d1 migrations apply address-notifications-db --local",
     "op": "bun scripts/operator.mts",
+    "fork-test": "bun scripts/fork-test.mts",
     "test": "bun test",
     "lint": "bunx oxlint src scripts test",
     "format": "bunx oxfmt --write .",
