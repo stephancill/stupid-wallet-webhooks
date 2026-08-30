@@ -70,6 +70,15 @@ GET  /operator/scanner-operations  # pending scanner commands
   disabled, classifies retries, dedupes by `(webhookId, eventId, eventType)`,
   and moves exhausted deliveries to `webhook-delivery-dlq`.
 
+## Skills
+
+Agent skills for working in this repo live under `skills/`:
+
+- `skills/operator` — operating the live service (metrics/lag, provisioning,
+  pause/resume, DLQ replay, deploy/migrations, secrets).
+- `skills/subscriber` — using the public customer API (webhooks, subscriptions,
+  delivery ledger, signature verification).
+
 ## Checks
 
 ```bash
