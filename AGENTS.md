@@ -53,6 +53,13 @@ Multi-tenant service that sends signed webhooks for EVM address activity
 - Operator provisioning: `bun scripts/operator.mts` (see README).
 - Requires Wrangler >= `4.126.0` (fixes a local `wrangler dev --local` crash).
 
+## Skills
+
+- `skills/operator` — operating the live service (metrics/lag, provisioning,
+  pause/resume, DLQ replay, deploy/migrations, secrets).
+- `skills/subscriber` — using the public customer API (webhooks, subscriptions,
+  delivery ledger, signature verification).
+
 ## Deployment
 
 - This repo is connected to Cloudflare for automatic deployments: pushing to
