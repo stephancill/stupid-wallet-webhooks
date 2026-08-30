@@ -135,10 +135,9 @@ in Wrangler `4.126.0`+.
 
 ## Open items / next steps
 
-- Populate `active_from_block = head + 1` in the real scanner (Milestone 2).
 - Move test delivery + delivery retries to the queue-based consumer in
   Milestone 3 (signing/retry-classification pattern already in
   `src/api/queues/webhookClient.ts`).
-- Wrangler is pinned to `4.126.0` (newest installable under bun's
-  `minimum-release-age`); note that `4.127.1` remains blocked until it is old
-  enough. The `scripts/fix-local.mts` workaround was removed.
+- Wrangler is on `4.126.0` (includes the local `_cf_ALARM` fix). Under bun's
+  `minimum-release-age`, `4.127.1` is not yet installable; there is no remaining
+  `fix-local` workaround needed.
