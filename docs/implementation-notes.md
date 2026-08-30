@@ -54,12 +54,13 @@ ordering, and deterministic ids. Total suite: 27 tests, all passing.
 
 ### Live-run note
 
-Under `wrangler dev --local`, chain activation/`eth_*` reads work via the
-public rpc-racer feed and the cursor boots correctly; delivering new mined
-blocks depends on the local DO alarm scheduler firing, which is flaky in local
-mode (alarms are managed by the same workerd `_cf_ALARM` machinery). Deployed /
-`--remote`, controlled-chain, or test-scheduled fixtures are the way to observe
-continuous scanning; Milestone 3 adds the fanout consumer and full delivery.
+Confirmed working on Wrangler `4.126.0` (the `_cf_ALARM` fix): a subscribe
+dispatches to the scanner Durable Object, its alarm fires, and `scanChain`
+bootstraps the cursor at the real head (verified: cursor advanced to a live
+height with a real hash, status `active`, no parse/alarm errors). The remaining
+limit is not tooling: to observe a _matched_ observation persist and enqueue,
+real tracked-address activity must land in a new block (or a controlled chain),
+which Milestone 3's fanout consumer reads.
 
 --- Earlier milestones below ---
 
@@ -127,7 +128,7 @@ This was fixed upstream in workerd (STOR-5374 / issue #6850), which is bundled
 in Wrangler `4.126.0`+.
 
 - Verified: on Wrangler `4.126.0`, wiping `.wrangler`, running all `d1
-  migrations apply --local`, and booting `wrangler dev --local` succeeded twice
+migrations apply --local`, and booting `wrangler dev --local` succeeded twice
   in a row (previously this exact sequence crashed on 4.125.0). The old
   `scripts/fix-local.mts` workaround was removed; `db:migrate:local` is now the
   plain migration command.

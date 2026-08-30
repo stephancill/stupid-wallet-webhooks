@@ -193,7 +193,7 @@ type RpcReceipt = {
 
 type RpcTx = {
   hash: string;
-  transactionIndex: string;
+  transactionIndex?: string;
   from: string;
   to: string | null;
   nonce: string;
@@ -205,7 +205,7 @@ type RpcBlock = {
   hash: string;
   parentHash: string;
   timestamp: string;
-  transactions: RpcTx[];
+  transactions: Array<RpcTx | string>;
 } | null;
 
 function hx(hex: string): bigint {
@@ -239,14 +239,17 @@ function to20(hex: string): `0x${string}` {
 
 function normalizeBlock(block: RpcBlock): NormalizedBlock {
   if (block === null) throw new Error("null block");
-  const transactions: NormalizedTx[] = block.transactions.map((tx, index) => ({
-    hash: tx.hash.toLowerCase() as `0x${string}`,
-    index: tx.transactionIndex === undefined ? index : Number(hx(tx.transactionIndex)),
-    from: to20(tx.from),
-    to: tx.to === null ? null : to20(tx.to),
-    nonce: hx(tx.nonce).toString(),
-    value: hx(tx.value),
-  }));
+  const entries = Array.isArray(block.transactions) ? block.transactions : [];
+  const transactions: NormalizedTx[] = entries
+    .filter((tx): tx is RpcTx => typeof tx === "object" && tx !== null)
+    .map((tx) => ({
+      hash: tx.hash.toLowerCase() as `0x${string}`,
+      index: tx.transactionIndex === undefined ? 0 : Number(hx(tx.transactionIndex)),
+      from: to20(tx.from),
+      to: tx.to === null ? null : to20(tx.to),
+      nonce: hx(tx.nonce).toString(),
+      value: hx(tx.value),
+    }));
   return {
     number: hx(block.number),
     hash: block.hash.toLowerCase() as `0x${string}`,
