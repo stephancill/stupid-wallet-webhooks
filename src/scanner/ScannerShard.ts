@@ -27,8 +27,6 @@ import { planRevertedDeliveries } from "../queues/plan";
 import { enqueueMatched } from "./queue";
 import type { DeliveryHook, Env } from "../env";
 
-const MAX_BLOCKS_PER_PASS = 20;
-const MIN_POLL_INTERVAL_MS = 1_000;
 const MAX_POLL_INTERVAL_MS = 30_000;
 
 /**
@@ -104,7 +102,7 @@ export class ScannerShard {
     }
     const tracked = await listTrackedAddressesForChain(this.db, chainId);
     if (tracked.length === 0) {
-      await this.schedule(30_000);
+      await this.schedule(this.catchUpMs());
       return;
     }
     const trackedSet = new Set(tracked) as Set<`0x${string}`>;
@@ -114,7 +112,7 @@ export class ScannerShard {
       head = await ethBlockNumber({ baseUrl: this.env.RPC_RACER_BASE_URL, chainId });
     } catch (error) {
       console.error(`scan: head read failed [chain ${chainId}]`, String(error));
-      await this.schedule(MIN_POLL_INTERVAL_MS);
+      await this.schedule(this.catchUpMs());
       return;
     }
     await setChainHead(this.db, chainId, Number(head)).catch(() => {
@@ -143,14 +141,18 @@ export class ScannerShard {
       await this.saveWindow([
         { number: Number(head), hash: headBlock.hash, parentHash: headBlock.parentHash },
       ]);
-      await this.schedule(pollInterval(head, chain?.block_speed_ms ?? null));
+      await this.schedule(
+        pollInterval(head, chain?.block_speed_ms ?? null, this.catchUpMs(), MAX_POLL_INTERVAL_MS),
+      );
       return;
     }
 
     const start = BigInt(cursor) + 1n;
     const end = head;
     if (start > end) {
-      await this.schedule(pollInterval(head, chain?.block_speed_ms ?? null));
+      await this.schedule(
+        pollInterval(head, chain?.block_speed_ms ?? null, this.catchUpMs(), MAX_POLL_INTERVAL_MS),
+      );
       return;
     }
 
@@ -159,7 +161,7 @@ export class ScannerShard {
     let blockNumber = start;
     let lastHash = cursorHash;
 
-    while (blockNumber <= end && processed < MAX_BLOCKS_PER_PASS) {
+    while (blockNumber <= end && processed < this.maxBlocksPerPass()) {
       const block = await ethGetBlockByNumber({
         baseUrl: this.env.RPC_RACER_BASE_URL,
         chainId,
@@ -172,7 +174,7 @@ export class ScannerShard {
           await this.processBlock({ chainId, block, trackedSet });
         } catch (error) {
           console.error(`scan error on chain ${chainId} block ${blockNumber}`, error);
-          await this.schedule(MIN_POLL_INTERVAL_MS);
+          await this.schedule(this.catchUpMs());
           return;
         }
         const held = {
@@ -224,15 +226,15 @@ export class ScannerShard {
           status: "degraded",
           reason: "no common ancestor within retained window (deep reorg)",
         });
-        await this.schedule(MIN_POLL_INTERVAL_MS);
+        await this.schedule(this.catchUpMs());
         return;
       }
     }
 
     const nextInterval =
-      processed >= MAX_BLOCKS_PER_PASS
-        ? MIN_POLL_INTERVAL_MS
-        : pollInterval(head, chain?.block_speed_ms ?? null);
+      processed >= this.maxBlocksPerPass()
+        ? this.catchUpMs()
+        : pollInterval(head, chain?.block_speed_ms ?? null, this.catchUpMs(), MAX_POLL_INTERVAL_MS);
     await this.schedule(nextInterval);
   }
 
@@ -319,6 +321,18 @@ export class ScannerShard {
     const existing = await this.state.storage.getAlarm();
     if (typeof existing === "number" && existing <= at) return;
     await this.state.storage.setAlarm(at);
+  }
+
+  /** Blocks scanned in one alarm pass before the shard yields (env, default 100). */
+  private maxBlocksPerPass(): number {
+    const parsed = Number.parseInt(this.env.SCANNER_MAX_BLOCKS_PER_PASS ?? "", 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 100;
+  }
+
+  /** Fastest poll cadence while a backlog remains (env, default 500ms). */
+  private catchUpMs(): number {
+    const parsed = Number.parseInt(this.env.SCANNER_MIN_POLL_INTERVAL_MS ?? "", 10);
+    return Number.isFinite(parsed) && parsed >= 100 ? parsed : 1000;
   }
 
   // -------------------------------------------------------------------------
@@ -412,14 +426,16 @@ export class ScannerShard {
   }
 }
 
-function pollInterval(head: bigint, blockSpeedMs: number | null): number {
+function pollInterval(
+  head: bigint,
+  blockSpeedMs: number | null,
+  minIntervalMs: number,
+  maxIntervalMs: number,
+): number {
   if (blockSpeedMs !== null && Number.isFinite(blockSpeedMs) && blockSpeedMs > 0) {
-    return Math.min(
-      Math.max(Math.round(blockSpeedMs / 2), MIN_POLL_INTERVAL_MS),
-      MAX_POLL_INTERVAL_MS,
-    );
+    return Math.min(Math.max(Math.round(blockSpeedMs / 2), minIntervalMs), maxIntervalMs);
   }
-  return MIN_POLL_INTERVAL_MS;
+  return minIntervalMs;
 }
 
 async function reactivateUnsupportedSubscriptions(db: D1Database, chainId: number): Promise<void> {

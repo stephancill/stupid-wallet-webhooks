@@ -995,12 +995,16 @@ export async function deliveryLatencyStats(db: D1Database): Promise<{
   p50Ms: number | null;
   p95Ms: number | null;
   p99Ms: number | null;
+  segments: {
+    observeToAttempt: { p50Ms: number | null; p95Ms: number | null; p99Ms: number | null };
+    attemptToDelivered: { p50Ms: number | null; p95Ms: number | null; p99Ms: number | null };
+  };
 }> {
   // Restrict to the last 24h so latency reflects current health, not history.
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
   const { results } = await db
     .prepare(
-      `SELECT wd.updated_at AS updated_at, obs.created_at AS observed_at
+      `SELECT wd.updated_at AS updated_at, wd.created_at AS queued_at, obs.created_at AS observed_at
        FROM webhook_deliveries wd
        JOIN activity_observations obs ON obs.id = wd.event_id
        WHERE wd.event_type = 'activity.observed'
@@ -1008,9 +1012,34 @@ export async function deliveryLatencyStats(db: D1Database): Promise<{
          AND wd.updated_at >= ?`,
     )
     .bind(since)
-    .all<{ updated_at: string; observed_at: string }>();
-  const samples = results.map((row) => Date.parse(row.updated_at) - Date.parse(row.observed_at));
-  return computeLatencyPercentiles(samples);
+    .all<{ updated_at: string; queued_at: string; observed_at: string }>();
+
+  const rows = results.map((row) => ({
+    observed: Date.parse(row.observed_at),
+    queued: Date.parse(row.queued_at),
+    delivered: Date.parse(row.updated_at),
+  }));
+  const total = computeLatencyPercentiles(rows.map((r) => r.delivered - r.observed));
+  const queueToDelivered = computeLatencyPercentiles(rows.map((r) => r.queued - r.observed));
+  const attempt = computeLatencyPercentiles(rows.map((r) => r.delivered - r.queued));
+  return {
+    eligibleCount: total.eligibleCount,
+    p50Ms: total.p50Ms,
+    p95Ms: total.p95Ms,
+    p99Ms: total.p99Ms,
+    segments: {
+      observeToAttempt: {
+        p50Ms: queueToDelivered.p50Ms,
+        p95Ms: queueToDelivered.p95Ms,
+        p99Ms: queueToDelivered.p99Ms,
+      },
+      attemptToDelivered: {
+        p50Ms: attempt.p50Ms,
+        p95Ms: attempt.p95Ms,
+        p99Ms: attempt.p99Ms,
+      },
+    },
+  };
 }
 
 /** Deletes retained rows past their documented retention (7d obs, 30d deliveries). */
@@ -1046,6 +1075,8 @@ export async function observeSummary(
     cursor: number | null;
     head: number | null;
     lag: number | null;
+    lagMs: number | null;
+    blockSpeedMs: number | null;
     reason: string | null;
   }>;
   deliveries: { pending: number; success: number; failed: number; dead_lettered: number };
@@ -1055,6 +1086,10 @@ export async function observeSummary(
     p50Ms: number | null;
     p95Ms: number | null;
     p99Ms: number | null;
+    segments: {
+      observeToAttempt: { p50Ms: number | null; p95Ms: number | null; p99Ms: number | null };
+      attemptToDelivered: { p50Ms: number | null; p95Ms: number | null; p99Ms: number | null };
+    };
   };
   pendingCommands: number;
   alerts: Array<{ severity: string; message: string }>;
@@ -1076,14 +1111,22 @@ export async function observeSummary(
   const lag = (cursor: number | null, head: number | null): number | null =>
     cursor !== null && head !== null ? Math.max(0, head - cursor) : null;
 
-  const chains = rows.map((chain) => ({
-    chainId: chain.chain_id,
-    status: chain.status,
-    cursor: chain.cursor_block,
-    head: chain.last_head_block,
-    lag: lag(chain.cursor_block, chain.last_head_block),
-    reason: chain.reason,
-  }));
+  const chains = rows.map((chain) => {
+    const blocksBehind = lag(chain.cursor_block, chain.last_head_block);
+    return {
+      chainId: chain.chain_id,
+      status: chain.status,
+      cursor: chain.cursor_block,
+      head: chain.last_head_block,
+      lag: blocksBehind,
+      lagMs:
+        blocksBehind !== null && chain.block_speed_ms !== null && chain.block_speed_ms > 0
+          ? blocksBehind * chain.block_speed_ms
+          : null,
+      blockSpeedMs: chain.block_speed_ms,
+      reason: chain.reason,
+    };
+  });
 
   const count = (list: Array<{ status: string; c: number }>, key: string) =>
     list.find((r) => r.status === key)?.c ?? 0;
@@ -1103,11 +1146,22 @@ export async function observeSummary(
       });
     if (chain.status === "paused")
       alerts.push({ severity: "warning", message: `chain ${chain.chainId} is paused` });
-    if (chain.lag !== null && chain.lag > 2)
-      alerts.push({
-        severity: "warning",
-        message: `chain ${chain.chainId} is ${chain.lag} blocks behind`,
-      });
+    if (chain.lag !== null && chain.lag > 2) {
+      // Prefer a time-based view: alert when a chain is meaningfully behind in
+      // wall-clock terms (10s), which is robust across chains with very fast
+      // block cadences (e.g. Arbitrum) where "2 blocks" is sub-second.
+      const lagSeconds = chain.lagMs !== null ? chain.lagMs / 1000 : null;
+      const tooBehind = lagSeconds !== null ? lagSeconds > 10 : true;
+      if (tooBehind) {
+        alerts.push({
+          severity: "warning",
+          message:
+            lagSeconds !== null
+              ? `chain ${chain.chainId} is ${chain.lag} blocks (~${lagSeconds.toFixed(1)}s) behind`
+              : `chain ${chain.chainId} is ${chain.lag} blocks behind`,
+        });
+      }
+    }
   }
   if (deliveries.dead_lettered > 0)
     alerts.push({
@@ -1141,6 +1195,7 @@ export async function observeSummary(
       p50Ms: latency.p50Ms,
       p95Ms: latency.p95Ms,
       p99Ms: latency.p99Ms,
+      segments: latency.segments,
     },
     pendingCommands,
     alerts,

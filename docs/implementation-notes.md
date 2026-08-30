@@ -95,6 +95,30 @@ Milestone working notes for the EVM Address Notifications worker.
   activation backfilled from the head and fast block cadence). It recovers by
   cursor advancement; keep an eye on lag in `/operator/metrics`.
 
+### Latency + lag tuning (pilot)
+
+- **Scanner cadence/cap is now env-configurable**: `SCANNER_MAX_BLOCKS_PER_PASS`
+  (default 100) limits blocks per alarm pass; `SCANNER_MIN_POLL_INTERVAL_MS`
+  (default 500ms) is the fastest catch-up cadence while a backlog remains. The
+  shard still relaxes to `blockSpeedMs/2` once caught up.
+- **Arbitrum lag fixed in practice**: under the retuned cadence, Arbitrum dropped
+  from ~85 blocks behind to ~12 (~3s) and stays there; its 250 ms block cadence
+  is no longer mis-alerted as "2 blocks behind".
+- **Lag reporting is time-aware**: `observeSummary` now returns `lagMs`
+  (`blocks × block_speed_ms`) per chain and raises the behind-alert only when a
+  chain is >10s behind in wall-clock terms (robust across fast cadences).
+- **Delivery-latency segmentation** (this is the key pilot finding):
+  `/operator/metrics` now splits observed→delivered into the p95 of two legs:
+  - `observeToAttempt` ≈ **18.9s** — observation persisted → Webhook‑delivery
+    queue consumer bid (i.e. the two‑queue fan‑out/fan‑out hop latency).
+  - `attemptToDelivered` ≈ **0.8s** — the actual HMAC‑signed HTTP POST.
+  Together with the observed p95 of 19.6s, this proves the 10s-latency target is
+  not spent on scanning/signing/delivering — it is **the two sequential Cloudflare
+  Queues** (each ~8s of consumer polling cadence). Meeting the p95-within-10s exit
+  criterion with this two-queue architecture likely requires a high-freshness
+  single-queue delivery fast path (a real design tradeoff vs. the documented
+  decoupling) — flagged for a decision.
+
 ### Local webhook receiver + tunnel (test tooling)
 
 - `scripts/webhook-receiver.mts`: a Bun HTTP receiver that logs every request
@@ -325,13 +349,15 @@ migrations apply --local`, and booting `wrangler dev --local` succeeded twice
 ## Open items / next steps
 
 See `docs/handover.md` for the full operator handover. This pass completed the
-pilot's chain coverage, end-to-end webhook validation, retention cleanup, and
-delivery-latency alerting (all detailed under the Milestone 5 section above).
-Still open:
+pilot's chain coverage, end-to-end webhook validation, retention cleanup,
+delivery-latency alerting, and latency/lag tuning (All detailed under the
+Milestone 5 section above). Still open:
 
-- **Delivery-latency target**: bring observed→delivered p95 under the 10s pilot
-  target (currently ~19.6s); likely tightening scanner poll cadence or delivery
-  concurrency as samples accumulate.
+- **Delivery-latency fast path (decision)**: observed p95 sits at ~19.6s, of
+  which ~18.9s is the two sequential queue hops (`observeToAttempt`) and only
+  ~0.8s is the HTTP attempt. Meeting the p95-within-10s exit criterion means
+  deciding whether to add a high-freshness single-queue delivery fast path or
+  accept the decoupled two-queue latency for the pilot.
 - **`workers_dev=true` → custom domain/route** and optional auth/TLS rules for
   hardening (still on the ephemeral `*.workers.dev` host).
 - **A bound-Worker test** proving the scanner never uses rpc-racer's public

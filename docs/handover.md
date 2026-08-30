@@ -120,9 +120,11 @@ Status as of this pass (most items done — see `docs/implementation-notes.md`):
    (delivered via a local receiver + `cloudflared` quick tunnel).
 3. **Enforce quotas for the pilot** — ✅ verified live: default 1,000/20 plus
    operator overrides for both subscription and chain quotas both enforced.
-4. **Delivery-latency alerting** — ✅ `deliveryLatency` (p50/95/99) added to
-   `/operator/metrics` with a p95 alert (`DELIVERY_LATENCY_ALERT_MS`, default 10s).
-   Live p95 ≈ 19.6s is above target — still tuning.
+4. **Delivery-latency alerting** — ✅ `deliveryLatency` (p50/95/99) with an
+   **`observeToAttempt` / `attemptToDelivered` segment split** is in
+   `/operator/metrics` (p95 alert per `DELIVERY_LATENCY_ALERT_MS`). Live
+   breakdown: **~18.9s** is queue hops, **~0.8s** is the HTTP attempt — so the
+   10s target is blocked by the two-queue path, not scanning/signing.
 5. **Optional hardening** — ⏳ `workers_dev=true` still in use; custom domain/route,
    auth/TLS rules, and a bound-Worker test remain.
 6. **Retention cleanup** — ✅ scheduled job now deletes 30-day delivery rows and

@@ -45,6 +45,11 @@ dead_letter_queue = "webhook-delivery-dlq"
 RPC_RACER_BASE_URL = "https://evm.stupidtech.net"
 RPC_SCANNER_FANOUT = "5"
 SCANNER_SHARD_COUNT = "2"
+# Blocks scanned per alarm pass before the shard yields (raise to help fast,
+# high-throughput chains like Arbitrum catch up after activation).
+SCANNER_MAX_BLOCKS_PER_PASS = "100"
+# Fastest catch-up poll cadence in ms while a backlog remains.
+SCANNER_MIN_POLL_INTERVAL_MS = "500"
 SUBSCRIPTION_DEFAULT_QUOTA = "1000"
 CHAIN_DEFAULT_QUOTA = "20"
 # Delivery-latency alert threshold in ms (observed→delivered p95). Default 10000.

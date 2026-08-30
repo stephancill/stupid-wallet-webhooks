@@ -10,6 +10,10 @@ export type Env = {
   RPC_INTERNAL_SECRET?: string;
   RPC_SCANNER_FANOUT?: string;
   SCANNER_SHARD_COUNT: string;
+  /** Blocks processed per scan pass before yielding (default 20). */
+  SCANNER_MAX_BLOCKS_PER_PASS?: string;
+  /** Fastest catch-up poll cadence in ms (default 1000). */
+  SCANNER_MIN_POLL_INTERVAL_MS?: string;
   SUBSCRIPTION_DEFAULT_QUOTA: string;
   CHAIN_DEFAULT_QUOTA: string;
   DELIVERY_LATENCY_ALERT_MS?: string;
