@@ -3,6 +3,11 @@ main = "src/index.ts"
 compatibility_date = "2026-04-21"
 workers_dev = false
 
+# Static assets (favicon etc.) served from the local public/ directory.
+[assets]
+directory = "public"
+binding = "ASSETS"
+
 # Custom domain (wt: hosted on the same Cloudflare account).
 [[routes]]
 pattern = "wallet-webhooks.stupidtech.net"

@@ -4,6 +4,8 @@ export type Env = {
   SCANNER_SHARD_2: DurableObjectNamespace;
   MATCHED_ACTIVITY_QUEUE: Queue<MatchedMessage>;
   WEBHOOK_DELIVERY_QUEUE: Queue<DeliveryHook>;
+  /** Static assets binding (`public/`). */
+  ASSETS?: Fetcher;
 
   ALLOW_INSECURE_TEST_WEBHOOKS?: string;
   RPC_RACER_BASE_URL: string;

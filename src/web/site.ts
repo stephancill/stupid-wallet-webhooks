@@ -4,26 +4,22 @@
  * product API stays on the `/v1` (/operator) routes.
  */
 
-export const faviconSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <rect width="32" height="32" rx="7" fill="#111"/>
-  <path d="M8 16l10-9 2 6h4l-10 10-3-6H8z" fill="#4ade80"/>
-</svg>`;
-
 export const siteHtml = `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Stupid Wallet Webhooks</title>
-  <meta property="og:title" content="Stupid Wallet Webhooks">
+  <title>stupid wallet webhooks</title>
+  <meta property="og:title" content="stupid wallet webhooks">
   <meta property="og:description" content="Signed webhooks for EVM address activity — top-level transactions, native value, and ERC-20 / ERC-721 transfers.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://wallet-webhooks.stupidtech.net">
   <meta property="og:site_name" content="Stupid Technology">
-  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="icon" href="/favicon.png" type="image/png">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 </head>
 <body>
-  <h1>Stupid Wallet Webhooks</h1>
+  <h1>stupid wallet webhooks</h1>
 
   <p>Signed webhooks for EVM address activity. Point us at an address, tell us which
   chains to watch, and get a cryptographically-signed <code>POST</code> whenever that
