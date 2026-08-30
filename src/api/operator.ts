@@ -252,6 +252,50 @@ operator.get("/chains", async (c) => {
   });
 });
 
+// Redeliver dead-lettered webhooks by re-enqueueing them for their original
+// destination with a regenerated (deterministic) body.
+operator.post("/dlq/replay", async (c) => {
+  const { listDeadLetterDeliveries, reopenDelivery, getObservationPayload } =
+    await import("../db/repository");
+  const { buildWebhookJson, parseObservationData } = await import("../queues/webhook-body");
+  const rows = await listDeadLetterDeliveries(c.env.DB);
+  const queued: Array<{ id: string; body: import("../env").DeliveryHook }> = [];
+  for (const row of rows) {
+    const obs = await getObservationPayload(c.env.DB, row.eventId);
+    const type =
+      row.eventType === "activity.reverted"
+        ? ("activity.reverted" as const)
+        : ("activity.observed" as const);
+    const data = obs === null ? {} : parseObservationData(obs.data);
+    const built = buildWebhookJson({ id: row.eventId, type, data });
+    queued.push({
+      id: `replay:${row.deliveryId}`,
+      body: {
+        deliveryId: row.deliveryId,
+        observationId: row.eventId,
+        eventType: type,
+        accountId: row.accountId,
+        webhookId: row.webhookId,
+        chainId: row.chainId ?? 0,
+        bodyJson: built.json,
+      },
+    });
+    await reopenDelivery(c.env.DB, row.deliveryId);
+  }
+  if (queued.length > 0) {
+    await c.env.WEBHOOK_DELIVERY_QUEUE.sendBatch(
+      queued as Array<{ id: string; body: import("../env").DeliveryHook }>,
+    );
+  }
+  return c.json({ replayed: queued.length });
+});
+
+// Aggregate delivery/scanning health metrics for operators.
+operator.get("/metrics", async (c) => {
+  const { metricsSummary } = await import("../db/repository");
+  return c.json(await metricsSummary(c.env.DB));
+});
+
 function serializeAccount(account: {
   id: string;
   name: string;

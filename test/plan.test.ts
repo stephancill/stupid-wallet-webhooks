@@ -1,5 +1,10 @@
 import { describe, expect, it } from "bun:test";
-import { planFanOutDeliveries, classifyDelivery, shouldSkip } from "../src/queues/plan";
+import {
+  planFanOutDeliveries,
+  classifyDelivery,
+  shouldSkip,
+  planRevertedDeliveries,
+} from "../src/queues/plan";
 
 const observation = {
   observationId: "evt_x",
@@ -69,5 +74,30 @@ describe("delivery classification", () => {
   it("dedup gate", () => {
     expect(shouldSkip(true)).toBe(true);
     expect(shouldSkip(false)).toBe(false);
+  });
+});
+
+describe("reverted-event planning", () => {
+  it("emits activity.reverted deliveries per eligible subscription with a deterministic body", () => {
+    const obs = {
+      observationId: "evt_x",
+      chainId: 1,
+      trackedAddress: "0x1234",
+      blockNumber: "10",
+      blockHash: "0xabc",
+    };
+    const plans = planRevertedDeliveries({
+      observation: obs,
+      subscriptions: [{ id: "sub_a", account_id: "acct_a", webhook_id: "wh_a" }],
+    });
+    expect(plans).toHaveLength(1);
+    expect(plans[0]?.body.eventType).toBe("activity.reverted");
+    expect(plans[0]?.body.bodyJson).toContain('"activity.reverted"');
+    // Deterministic
+    const again = planRevertedDeliveries({
+      observation: obs,
+      subscriptions: [{ id: "sub_a", account_id: "acct_a", webhook_id: "wh_a" }],
+    });
+    expect(again[0]?.body.bodyJson).toBe(plans[0]?.body.bodyJson);
   });
 });

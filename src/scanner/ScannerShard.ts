@@ -9,7 +9,8 @@ import {
   setChainCursor,
   setActiveFromBlockForChain,
   upsertObservation,
-  markObservationsRevertedByBlock,
+  markBlockRevertedAndList,
+  listEligibleSubscriptions,
 } from "../db/repository";
 import { resolveChain } from "../rpc/chain";
 import {
@@ -20,8 +21,9 @@ import {
 } from "../rpc/client";
 import { analyzeBlock, finalizeBundles, observationData } from "../domain/activity";
 import { classifyChain, pushWindow, pruneTo, type HeldBlock } from "../domain/reorg";
+import { planRevertedDeliveries } from "../queues/plan";
 import { enqueueMatched } from "./queue";
-import type { Env } from "../env";
+import type { DeliveryHook, Env } from "../env";
 
 const MAX_BLOCKS_PER_PASS = 20;
 const MIN_POLL_INTERVAL_MS = 1_000;
@@ -173,8 +175,27 @@ export class ScannerShard {
         processed += 1;
       } else if (verdict.kind === "reorg") {
         let revertedTotal = 0;
+        const revertedDeliveries: Array<{ id: string; body: DeliveryHook }> = [];
         for (const orphan of verdict.orphaned) {
-          revertedTotal += await markObservationsRevertedByBlock(this.db, chainId, orphan);
+          const revertedRows = await markBlockRevertedAndList(this.db, chainId, orphan);
+          revertedTotal += revertedRows.length;
+          for (const row of revertedRows) {
+            const subs = await listEligibleSubscriptions(
+              this.db,
+              chainId,
+              row.trackedAddress,
+              Number(row.blockNumber),
+            );
+            for (const planned of planRevertedDeliveries({
+              observation: { ...row, chainId },
+              subscriptions: subs,
+            })) {
+              revertedDeliveries.push({ id: planned.key, body: planned.body });
+            }
+          }
+        }
+        if (revertedDeliveries.length > 0) {
+          await this.env.WEBHOOK_DELIVERY_QUEUE.sendBatch(revertedDeliveries);
         }
         window = pruneTo(window, verdict.ancestor);
         await this.saveWindow(window);

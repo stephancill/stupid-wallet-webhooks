@@ -10,7 +10,7 @@ export function buildWebhookJson({
   data,
 }: {
   id: string;
-  type: "activity.observed" | "webhook.test";
+  type: "activity.observed" | "activity.reverted" | "webhook.test";
   data: Record<string, unknown>;
 }): { json: string; createdAt: string } {
   const blockTimestamp = typeof data.blockTimestamp === "string" ? data.blockTimestamp : "";

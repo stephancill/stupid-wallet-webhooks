@@ -73,3 +73,48 @@ export function classifyDelivery({
 export function shouldSkip(hasSucceededWhileAccounted: boolean): boolean {
   return hasSucceededWhileAccounted;
 }
+
+/**
+ * Pure reverted-event planning: emits one `activity.reverted` delivery per
+ * eligible subscription for an observation that is now orphaned.
+ */
+export function planRevertedDeliveries({
+  observation,
+  subscriptions,
+}: {
+  observation: {
+    observationId: string;
+    chainId: number;
+    trackedAddress: string;
+    blockNumber: string;
+    blockHash: string;
+  };
+  subscriptions: Array<{ id: string; account_id: string; webhook_id: string }>;
+}): Array<{ key: string; body: DeliveryHook }> {
+  const data = {
+    chainId: observation.chainId,
+    trackedAddress: observation.trackedAddress,
+    blockNumber: observation.blockNumber,
+    blockHash: observation.blockHash,
+  };
+  const built = buildWebhookJson({
+    id: observation.observationId,
+    type: "activity.reverted",
+    data,
+  });
+  return subscriptions.map((subscription) => ({
+    key: `d-${subscription.webhook_id}:${observation.observationId}:reverted`,
+    body: {
+      deliveryId: IDs.delivery(),
+      observationId: observation.observationId,
+      eventType: "activity.reverted",
+      accountId: subscription.account_id,
+      webhookId: subscription.webhook_id,
+      chainId: observation.chainId,
+      bodyJson: built.json,
+      ...(subscription.webhook_id
+        ? { trackedAddress: observation.trackedAddress, blockNumber: observation.blockNumber }
+        : {}),
+    } satisfies DeliveryHook,
+  }));
+}

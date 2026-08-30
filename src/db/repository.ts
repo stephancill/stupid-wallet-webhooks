@@ -1019,6 +1019,120 @@ export async function markObservationsRevertedByBlock(
   return res.meta.changes ?? 0;
 }
 
+/** Marks a reorged block's observations reverted and returns them (for fan-out). */
+export async function markBlockRevertedAndList(
+  db: D1Database,
+  chainId: number,
+  blockNumber: number,
+): Promise<
+  Array<{ observationId: string; trackedAddress: string; blockNumber: string; blockHash: string }>
+> {
+  const { results } = await db
+    .prepare(
+      "SELECT id, tracked_address, block_hash FROM activity_observations WHERE chain_id = ? AND block_number = ? AND status = 'observed'",
+    )
+    .bind(chainId, blockNumber)
+    .all<{
+      id: string;
+      tracked_address: Uint8Array | ArrayBuffer;
+      block_hash: Uint8Array | ArrayBuffer;
+    }>();
+  const rows = results.map((r) => ({
+    observationId: String(r.id),
+    trackedAddress: addressBytesToHex(r.tracked_address),
+    blockHash: _bytesToHex(
+      r.block_hash instanceof ArrayBuffer ? new Uint8Array(r.block_hash) : r.block_hash,
+    ),
+    blockNumber: String(blockNumber),
+  }));
+  await db
+    .prepare(
+      "UPDATE activity_observations SET status = 'reverted', reverted_at = ? WHERE chain_id = ? AND block_number = ? AND status = 'observed'",
+    )
+    .bind(nowISO(), chainId, blockNumber)
+    .run();
+  return rows;
+}
+
+/** All terminal dead-lettered deliveries with the data needed to replay them. */
+export async function listDeadLetterDeliveries(
+  db: D1Database,
+  limit = 500,
+): Promise<
+  Array<{
+    deliveryId: string;
+    webhookId: string;
+    eventId: string;
+    eventType: string;
+    accountId: string;
+    chainId: number | null;
+  }>
+> {
+  const { results } = await db
+    .prepare(
+      "SELECT id, chain_id, webhook_id, event_id, event_type, account_id FROM webhook_deliveries WHERE status = 'dead_lettered' ORDER BY created_at ASC LIMIT ?",
+    )
+    .bind(limit)
+    .all<Record<string, unknown>>();
+  return results.map((r) => ({
+    deliveryId: String(r.id),
+    webhookId: String(r.webhook_id),
+    eventId: String(r.event_id),
+    eventType: String(r.event_type),
+    accountId: String(r.account_id),
+    chainId: r.chain_id === null ? null : Number(r.chain_id),
+  }));
+}
+
+/** Marks a dead-lettered delivery pending so the next pass redelivers it. */
+export async function reopenDelivery(db: D1Database, deliveryId: string): Promise<void> {
+  await db
+    .prepare(
+      "UPDATE webhook_deliveries SET status = 'pending', last_error = NULL, updated_at = ? WHERE id = ?",
+    )
+    .bind(nowISO(), deliveryId)
+    .run();
+}
+
+/** Lightweight metrics aggregates from the control/store tables. */
+export async function metricsSummary(db: D1Database): Promise<{
+  activeChains: number;
+  observations: { observed: number; reverted: number };
+  deliveries: { pending: number; success: number; failed: number; dead_lettered: number };
+  pendingCommands: number;
+}> {
+  const [activeChains, obsRows, delRows, pendingCommands] = await Promise.all([
+    db
+      .prepare("SELECT COUNT(*) AS c FROM chain_registry WHERE status IN ('active','degraded')")
+      .first<{ c: number }>(),
+    db
+      .prepare("SELECT status, COUNT(*) AS c FROM activity_observations GROUP BY status")
+      .all<{ status: string; c: number }>(),
+    db
+      .prepare("SELECT status, COUNT(*) AS c FROM webhook_deliveries GROUP BY status")
+      .all<{ status: string; c: number }>(),
+    db
+      .prepare("SELECT COUNT(*) AS c FROM scanner_operations WHERE status = 'pending'")
+      .first<{ c: number }>(),
+  ]);
+  const count = (rows: Array<{ status: string; c: number }>, key: string) =>
+    rows.find((r) => r.status === key)?.c ?? 0;
+  return {
+    activeChains: Number(activeChains?.c ?? 0),
+    observations: {
+      observed: count(obsRows?.results ?? [], "observed"),
+      reverted: count(obsRows?.results ?? [], "reverted"),
+    },
+    deliveries: {
+      pending: count(delRows?.results ?? [], "pending"),
+      success: count(delRows?.results ?? [], "success"),
+      failed: count(delRows?.results ?? [], "failed"),
+      dead_lettered: count(delRows?.results ?? [], "dead_lettered"),
+    },
+    pendingCommands: Number(pendingCommands?.c ?? 0),
+  };
+}
+
 function hexToBytes(hex: string): Uint8Array {
   return _hexToBytes(hex as `0x${string}`);
 }

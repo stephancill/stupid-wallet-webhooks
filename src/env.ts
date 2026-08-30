@@ -34,12 +34,12 @@ export type MatchedMessage = {
 export type DeliveryHook = {
   deliveryId: string;
   observationId: string;
-  eventType: "activity.observed" | "webhook.test";
+  eventType: "activity.observed" | "activity.reverted" | "webhook.test";
   accountId: string;
   webhookId: string;
   chainId: number;
-  trackedAddress: string;
-  blockNumber: string;
+  trackedAddress?: string;
+  blockNumber?: string;
   bodyJson: string;
 };
 

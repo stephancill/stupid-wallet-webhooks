@@ -24,6 +24,7 @@ Milestone working notes for the EVM Address Notifications worker.
   `paused`. Reorg window + observation revert behavior unit-tested.
 
 ### Deferred (documented)
+
 - Fanning reverted observations out as `activity.reverted` webhooks (delivery of
   a reverted event is a straightforward extension of the M3 delivery consumer).
 - Full metrics suite + DLQ replay tooling and the restart/timeout/deep-reorg
