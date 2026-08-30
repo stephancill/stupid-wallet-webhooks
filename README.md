@@ -9,6 +9,11 @@ activity.
 Cloudflare Workers · Hono · D1 · Durable Objects · Queues · Zod · viem ·
 (stupid tech) template.
 
+## Website
+
+The custom domain's root (`/`) serves a minimal landing page for the product
+(`src/web/site.ts`); the product API stays on `/v1` and `/operator`.
+
 ## Dev setup
 
 ```bash
