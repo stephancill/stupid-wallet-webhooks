@@ -4,6 +4,8 @@ Multi-tenant service that lets customers subscribe to EVM addresses and receive
 signed webhooks for top-level transactions, native value, ERC-20, and ERC-721
 activity.
 
+Full customer API reference: [`docs/api.md`](docs/api.md).
+
 ## Stack
 
 Cloudflare Workers · Hono · D1 · Durable Objects · Queues · Zod · viem ·
