@@ -3,6 +3,7 @@ import { HTTPException } from "hono/http-exception";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import type { Env } from "../env";
+import { shardNamespace, shardCount } from "../env";
 import { operatorAuth } from "./middleware";
 import {
   insertAccount as createAccount,
@@ -209,7 +210,7 @@ operator.post(
   },
 );
 
-// Operator: pause / resume a chain's scanner (paused chains stop polling).
+// Operator may pause/resume a chain's scanner (paused chains stop polling).
 operator.post(
   "/chains/:chainId/pause",
   zValidator("param", z.object({ chainId: z.coerce.number().int().positive() })),
@@ -289,6 +290,19 @@ operator.post("/dlq/replay", async (c) => {
   }
   return c.json({ replayed: queued.length });
 });
+
+// Force an out-of-band scan of one chain through its scanner Durable Object.
+operator.post(
+  "/chains/:chainId/scan",
+  zValidator("param", z.object({ chainId: z.coerce.number().int().positive() })),
+  async (c) => {
+    const { chainId } = c.req.valid("param");
+    const ns = shardNamespace(c.env, chainId % shardCount(c.env));
+    const stub = ns.get(ns.idFromName(`chain-${chainId}`));
+    const res = await stub.fetch("https://scanner.internal/scan", { method: "POST" });
+    return c.json({ chainId, scan: res.ok ? "ok" : `HTTP ${res.status}` });
+  },
+);
 
 // Aggregate delivery/chain health, per-chain lag, and alerts for operators.
 operator.get("/metrics", async (c) => {

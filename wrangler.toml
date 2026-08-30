@@ -1,14 +1,12 @@
 name = "address-notifications"
 main = "src/index.ts"
 compatibility_date = "2026-04-21"
-workers_dev = false
+workers_dev = true
 
 [[d1_databases]]
 binding = "DB"
 database_name = "address-notifications-db"
-# Placeholder for local development. Replace with the real database_id before
-# deploying to Cloudflare.
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "abb46259-a808-4350-bc3c-cbd8201f85ef"
 
 [[durable_objects.bindings]]
 name = "SCANNER_SHARD_1"
