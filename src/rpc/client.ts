@@ -326,6 +326,10 @@ export async function ethGetTransactionReceipts({
   txHashes: `0x${string}`[];
   signal?: AbortSignal;
 }): Promise<Map<`0x${string}`, Receipt>> {
+  if (txHashes.length === 0) {
+    // No receipts needed — do not send an (invalid) empty batch.
+    return new Map();
+  }
   const responses = await jsonRpcBatch<JsonRpcBatchResponseItem[]>({
     baseUrl,
     chainId,

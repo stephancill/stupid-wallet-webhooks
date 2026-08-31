@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { fetchBlockAndLogs, setInternalRpc } from "../src/rpc/client";
+import { ethGetTransactionReceipts, fetchBlockAndLogs, setInternalRpc } from "../src/rpc/client";
 import { TRANSFER_TOPIC } from "../src/domain/activity";
 
 /**
@@ -82,5 +82,27 @@ describe("block+logs RPC batch", () => {
 
     expect(block.number).toBe(16n);
     expect(logs).toHaveLength(1);
+  });
+});
+
+describe("receipts batch", () => {
+  it("does not send an (invalid) empty batch when there are no receipts", async () => {
+    const real = globalThis.fetch;
+    let called = 0;
+    globalThis.fetch = (async () => {
+      called += 1;
+      return new Response(
+        JSON.stringify({ jsonrpc: "2.0", id: 1, error: { message: "should not reach" } }),
+        { status: 400 },
+      );
+    }) as unknown as typeof fetch;
+    const m = await ethGetTransactionReceipts({
+      baseUrl: "https://evm.stupidtech.net",
+      chainId: 1,
+      txHashes: [],
+    });
+    expect(called).toBe(0);
+    expect(m.size).toBe(0);
+    globalThis.fetch = real;
   });
 });
