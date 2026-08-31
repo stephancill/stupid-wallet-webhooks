@@ -22,6 +22,7 @@ function fakeD1() {
 
 async function makeShard(envOverrides: Record<string, string>) {
   const storage = new Map<string, unknown>();
+  const alarms: number[] = [];
   const db = fakeD1();
   const state = {
     id: { name: "chain-137" },
@@ -35,7 +36,9 @@ async function makeShard(envOverrides: Record<string, string>) {
       async getAlarm() {
         return undefined;
       },
-      async setAlarm() {},
+      async setAlarm(at: number) {
+        alarms.push(at);
+      },
     },
   };
   const env = {
@@ -48,7 +51,7 @@ async function makeShard(envOverrides: Record<string, string>) {
     blockFailures: { block: bigint; count: number } | null;
     registerBlockFailure(chainId: number, blockNumber: bigint): Promise<boolean>;
   };
-  return { shard, db };
+  return { shard, db, alarms };
 }
 
 function mockRpcFetch(): () => void {
@@ -84,13 +87,14 @@ describe("scanner skip-persistently-failing-block guard", () => {
   it("only triggers recovery after the configured number of consecutive failures", async () => {
     const restore = mockRpcFetch();
     try {
-      const { shard, db } = await makeShard({ SCANNER_SKIP_BLOCK_FAILURES: "3" });
+      const { shard, db, alarms } = await makeShard({ SCANNER_SKIP_BLOCK_FAILURES: "3" });
       const blockNumber = 123n;
       expect(await shard.registerBlockFailure(137, blockNumber)).toBe(false);
       expect(await shard.registerBlockFailure(137, blockNumber)).toBe(false);
       expect(await shard.registerBlockFailure(137, blockNumber)).toBe(true); // recovery
       expect(shard.blockFailures).toBeNull();
       expect(db.calls.some((s) => /cursor_block/.test(s))).toBe(true);
+      expect(alarms).toHaveLength(1);
     } finally {
       restore();
     }

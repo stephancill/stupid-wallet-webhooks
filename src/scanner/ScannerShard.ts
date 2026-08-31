@@ -409,6 +409,7 @@ export class ScannerShard {
       status: "active",
       reason: opts.reason ?? null,
     });
+    await this.schedule(this.catchUpMs());
     console.log(
       `re-anchored chain ${chainId} after cursor gap: rescan from ${anchorBlock.number} to head ${headBlock}`,
     );

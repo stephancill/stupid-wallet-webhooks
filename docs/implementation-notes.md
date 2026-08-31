@@ -68,6 +68,13 @@ D1-write work). Fix in `src/scanner/ScannerShard.ts` + `src/api/operator.ts`:
 - The unresolvable counter is stored in DO storage so it survives shard
   re-creation between alarms.
 
+Follow-up from the Polygon 137 incident: a successful re-anchor updated the DO
+window and D1 cursor but did not schedule another alarm. Recovery therefore
+parked the chain at exactly `head - SCANNER_REANCHOR_DEPTH_BLOCKS` (lag 64 by
+default). `recoverFromUnresolvable` now schedules the next catch-up scan itself,
+covering automatic, poisoned-block, and operator-triggered re-anchors. The
+scanner recovery test asserts that an alarm is set.
+
 ### RPC batching for rpc-racer (cost)
 
 The scanner's per-block RPC churn is the biggest driver of rpc-racer Worker
