@@ -42,6 +42,29 @@ granularity.
 earlier volume on fast chains and ~unchanged on sparse chains. 30-chain D1
 estimate drops from ~$77/mo to ~$0-2 (under the 50M/mo bucket).
 
+### Degraded-chain auto-recovery
+
+Live operator metrics showed chains could park forever in the scanner's
+`unresolvable` branch ("no common ancestor within retained window") and stay
+`degraded` behind. Root cause: `classifyChain` returning `unresolvable` was
+terminal — `scanChain` degraded and retried the same block forever.
+
+Inventory (chains 1 & 100 were ~13–17h behind at the time, so pre-dating the
+D1-write work). Fix in `src/scanner/ScannerShard.ts` + `src/api/operator.ts`:
+
+- **Auto re-anchor**: after `SCANNER_UNRESOLVABLE_LIMIT` (default 3) consecutive
+  unresolvable scans, re-anchor at `head − SCANNER_REANCHOR_DEPTH_BLOCKS`
+  (default 64) and resume scanning the trailing window forward. Idempotent
+  observation upserts + the enqueue guard mean nothing double-delivers; the
+  deep gap is logged/skipped (it was already unreachable while parked).
+- **Head stays honest on anomaly paths**: `persistHeadOnly` still records
+  `last_head_block` while parked, so the operator lag metric doesn't fabricate a
+  huge backlog (this undoes the head-staleness side-effect of cursor coalescing).
+- **Operator override**: `POST /operator/chains/:chainId/re-anchor` forces an
+  immediate resync regardless of the threshold counter.
+- The unresolvable counter is stored in DO storage so it survives shard
+  re-creation between alarms.
+
 ### Deployed resources (Cloudflare)
 
 - Worker: `address-notifications` → **https://wallet-webhooks.stupidtech.net** (custom domain; workers.dev disabled)

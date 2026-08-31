@@ -304,6 +304,22 @@ operator.post(
   },
 );
 
+// Force a degraded/unresolvable chain to re-anchor to a recent head and rescan.
+operator.post(
+  "/chains/:chainId/re-anchor",
+  zValidator("param", z.object({ chainId: z.coerce.number().int().positive() })),
+  async (c) => {
+    const { chainId } = c.req.valid("param");
+    const ns = shardNamespace(c.env, chainId % shardCount(c.env));
+    const stub = ns.get(ns.idFromName(`chain-${chainId}`));
+    const res = await stub.fetch("https://scanner.internal/re-anchor", { method: "POST" });
+    return c.json({
+      chainId,
+      reanchor: res.ok ? "ok" : `HTTP ${res.status}`,
+    });
+  },
+);
+
 // Aggregate delivery/chain health, per-chain lag, and alerts for operators.
 operator.get("/metrics", async (c) => {
   const { observeSummary } = await import("../db/repository");

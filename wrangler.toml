@@ -65,6 +65,11 @@ SCANNER_MIN_POLL_INTERVAL_MS = "500"
 # Max cadence for persisting the scanner D1 cursor (ms); keeps D1 writes low on
 # fast-cadence chains. Default 8000.
 SCANNER_CURSOR_D1_MS = "8000"
+# Consecutive unresolvable scans before the scanner auto-resyncs a chain.
+# Default 3. 0 = disable auto-resync.
+SCANNER_UNRESOLVABLE_LIMIT = "3"
+# Blocks behind the head to re-anchor at when a cursor is unrecoverable. Default 64.
+SCANNER_REANCHOR_DEPTH_BLOCKS = "64"
 SUBSCRIPTION_DEFAULT_QUOTA = "1000"
 CHAIN_DEFAULT_QUOTA = "20"
 # Delivery-latency alert threshold in ms (observed→delivered p95). Default 10000.

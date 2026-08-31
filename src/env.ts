@@ -18,6 +18,10 @@ export type Env = {
   SCANNER_MIN_POLL_INTERVAL_MS?: string;
   /** Max D1 `cursor` persistence cadence in ms (default 8000). */
   SCANNER_CURSOR_D1_MS?: string;
+  /** Consecutive unresolvable scans before auto re-anchor (default 3). */
+  SCANNER_UNRESOLVABLE_LIMIT?: string;
+  /** Blocks behind the head to re-anchor at when the cursor is unrecoverable (default 64). */
+  SCANNER_REANCHOR_DEPTH_BLOCKS?: string;
   SUBSCRIPTION_DEFAULT_QUOTA: string;
   CHAIN_DEFAULT_QUOTA: string;
   DELIVERY_LATENCY_ALERT_MS?: string;

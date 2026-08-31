@@ -86,6 +86,21 @@ export class ScannerShard {
       await this.scanChain(chainId);
       return json("ok", 200);
     }
+    // Operator override: force re-anchoring to a recent head and rescan, even if
+    // the consecutive-unresolvable threshold hasn't been reached.
+    if (url.pathname === "/re-anchor") {
+      const chainId = this.chainId();
+      if (Number.isNaN(chainId)) return json("no chain", 400);
+      let head: bigint;
+      try {
+        head = await ethBlockNumber({ baseUrl: this.env.RPC_RACER_BASE_URL, chainId });
+      } catch {
+        return json("head read failed", 502);
+      }
+      await this.state.storage.put("unresolvableCount", 0);
+      await this.recoverFromUnresolvable(chainId, Number(head));
+      return json("ok", 200);
+    }
     return json("Not found", 404);
   }
 
@@ -236,10 +251,24 @@ export class ScannerShard {
         // Replay this block now that its parent is the found ancestor; we do not
         // advance `blockNumber`, so the loop reprocesses it canonically.
       } else {
-        await updateChainRegistryStatus(this.db, chainId, {
-          status: "degraded",
-          reason: "no common ancestor within retained window (deep reorg)",
-        });
+        // Unresolvable (no shared ancestor in the retained window). Park as
+        // degraded for a few consecutive tries; if it persists, the cursor is
+        // unrecoverable, so re-anchor to a recent canonical block and rescan the
+        // trailing window (idempotent + dedup-guarded, so nothing double-delivers).
+        const tries = ((await this.state.storage.get<number>("unresolvableCount")) ?? 0) + 1;
+        await this.state.storage.put("unresolvableCount", tries);
+        if (tries < this.unresolvableLimit()) {
+          await updateChainRegistryStatus(this.db, chainId, {
+            status: "degraded",
+            reason: "no common ancestor within retained window (deep reorg)",
+          });
+          // Keep metrics honest: the anomaly path still records the observed head.
+          await this.persistHeadOnly(chainId, Number(head));
+          await this.schedule(this.catchUpMs());
+          return;
+        }
+        await this.state.storage.put("unresolvableCount", 0);
+        await this.recoverFromUnresolvable(chainId, Number(head));
         await this.schedule(this.catchUpMs());
         return;
       }
@@ -264,6 +293,60 @@ export class ScannerShard {
 
   private async saveWindow(window: HeldBlock[]): Promise<void> {
     await this.state.storage.put("blockWindow", window);
+  }
+
+  /** Consecutive `unresolvable` scans before the shard auto re-anchors (env, default 3). */
+  private unresolvableLimit(): number {
+    const parsed = Number.parseInt(this.env.SCANNER_UNRESOLVABLE_LIMIT ?? "", 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 3;
+  }
+
+  /** Blocks behind the head to re-anchor at when the cursor is unrecoverable (default 64). */
+  private reanchorDepth(): number {
+    const parsed = Number.parseInt(this.env.SCANNER_REANCHOR_DEPTH_BLOCKS ?? "", 10);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : 64;
+  }
+
+  /** Records just the observed head on an anomaly/early-return path (keeps lag honest). */
+  private async persistHeadOnly(chainId: number, headBlock: number): Promise<void> {
+    await setChainCursorAndHead(this.db, chainId, null, null, headBlock).catch(() => {
+      /* best-effort */
+    });
+  }
+
+  /**
+   * Recover from an unrecoverable cursor: re-anchor at `head − reanchorDepth` and
+   * rescan the trailing window forward to the head. Lesser/older activity in the
+   * deep gap is skipped (it was already unreachable while parked degraded).
+   */
+  private async recoverFromUnresolvable(chainId: number, headBlock: number): Promise<void> {
+    const from = Math.max(1, headBlock - this.reanchorDepth());
+    let anchorBlock: { number: number; hash: string; parentHash: string } | null = null;
+    try {
+      const raw = await ethGetBlockByNumber({
+        baseUrl: this.env.RPC_RACER_BASE_URL,
+        chainId,
+        blockNumber: BigInt(from),
+        includeTransactions: false,
+      });
+      if (raw) {
+        anchorBlock = { number: Number(raw.number), hash: raw.hash, parentHash: raw.parentHash };
+      }
+    } catch (error) {
+      console.error(`re-anchor head read failed [chain ${chainId}]`, String(error));
+    }
+    if (anchorBlock === null) return;
+    this.pendingTip = { number: anchorBlock.number, hash: anchorBlock.hash };
+    this.pendingHead = headBlock;
+    await this.saveWindow([anchorBlock]);
+    await setChainCursorAndHead(this.db, chainId, anchorBlock.number, anchorBlock.hash, headBlock);
+    await updateChainRegistryStatus(this.db, chainId, {
+      status: "active",
+      reason: null,
+    });
+    console.log(
+      `re-anchored chain ${chainId} after unresolvable cursor: rescan from ${anchorBlock.number} to head ${headBlock}`,
+    );
   }
 
   private async processBlock({

@@ -8,3 +8,7 @@ RPC_INTERNAL_SECRET=
 RPC_SCANNER_FANOUT=2
 # Max D1 cursor persistence cadence in ms (coalesces cursor writes on fast chains).
 # SCANNER_CURSOR_D1_MS=8000
+# Consecutive unresolvable scans before auto resync (default 3). 
+# SCANNER_UNRESOLVABLE_LIMIT=3
+# Blocks behind head to re-anchor at when a cursor is unrecoverable (default 64).
+# SCANNER_REANCHOR_DEPTH_BLOCKS=64

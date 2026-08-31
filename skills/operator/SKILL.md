@@ -52,6 +52,9 @@ Treat any `severity:critical` (dead-lettered deliveries) as an action item.
 
 - **Per-chain detail**: `GET /operator/chains/:chainId`
 - **Force an out-of-band scan**: `POST /operator/chains/:chainId/scan`
+- **Force a degraded/unresolvable chain to re-sync**: `POST
+  /operator/chains/:chainId/re-anchor` (re-anchors to `head − 64` and rescans;
+  the scanner also auto-recovers after a few consecutive unresolvable scans)
 - **Pause / resume scanning**: `POST /operator/chains/:chainId/pause` |
   `/resume`
 - **Pending scanner commands**: `GET /operator/scanner-operations`
