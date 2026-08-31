@@ -30,6 +30,9 @@ Fixes in `src/scanner/ScannerShard.ts`:
 - **Idempotent fan-out guard** — `processBlock` enqueues a delivery only when
   `upsertObservation` reports the row was newly created (`ON CONFLICT DO
 NOTHING`), so a rare mid-pass resume never double-delivers a webhook.
+- **Unit guard** — `test/scanner-coalesce.test.ts` asserts `maybeFlushCursor`
+  writes ≤1 `chain_registry` UPDATE per interval and always carries the latest
+  tip, so a future refactor can't silently regress to per-block D1 writes.
 
 Lag alert is time-based (`lagMs > 10s`), so an ≤8s D1-cursor staleness stays
 under the alert threshold; the operator lag metric remains accurate at D1
