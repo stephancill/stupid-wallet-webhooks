@@ -17,9 +17,9 @@ import { resolveChain } from "../rpc/chain";
 import {
   ethBlockNumber,
   ethGetBlockByNumber,
-  ethGetLogs,
-  ethGetTransactionReceipt,
+  ethGetTransactionReceipts,
   setInternalRpc,
+  fetchBlockAndLogs,
 } from "../rpc/client";
 import { analyzeBlock, finalizeBundles, observationData } from "../domain/activity";
 import { classifyChain, pushWindow, pruneTo, type HeldBlock } from "../domain/reorg";
@@ -189,16 +189,29 @@ export class ScannerShard {
     let lastHash = cursorHash;
 
     while (blockNumber <= end && processed < this.maxBlocksPerPass()) {
-      const block = await ethGetBlockByNumber({
-        baseUrl: this.env.RPC_RACER_BASE_URL,
-        chainId,
-        blockNumber,
-      });
+      // One batched request fetches the block header + its logs (instead of two
+      // calls), cutting rpc-racer requests per block roughly in half.
+      let block: import("../domain/activity").NormalizedBlock;
+      let logs: import("../domain/activity").NormalizedLog[];
+      try {
+        ({ block, logs } = await fetchBlockAndLogs({
+          baseUrl: this.env.RPC_RACER_BASE_URL,
+          chainId,
+          blockNumber,
+        }));
+      } catch (error) {
+        console.error(
+          `scan block fetch failed [chain ${chainId} block ${blockNumber}]`,
+          String(error),
+        );
+        await this.schedule(this.catchUpMs());
+        return;
+      }
       const verdict = classifyChain(window, { parentHash: block.parentHash, cursorHash: lastHash });
 
       if (verdict.kind === "ok") {
         try {
-          await this.processBlock({ chainId, block, trackedSet });
+          await this.processBlock({ chainId, block, logs, trackedSet });
         } catch (error) {
           console.error(`scan error on chain ${chainId} block ${blockNumber}`, error);
           await this.schedule(this.catchUpMs());
@@ -352,30 +365,24 @@ export class ScannerShard {
   private async processBlock({
     chainId,
     block,
+    logs,
     trackedSet,
   }: {
     chainId: number;
     block: import("../domain/activity").NormalizedBlock;
+    logs: import("../domain/activity").NormalizedLog[];
     trackedSet: Set<`0x${string}`>;
   }): Promise<void> {
-    // Consistent read: logs are keyed by the exact block hash we just fetched.
-    const logs = await ethGetLogs({
-      baseUrl: this.env.RPC_RACER_BASE_URL,
-      chainId,
-      blockHash: block.hash,
-    });
-
+    // `logs` are fetched in the same batched request as the block header, so
+    // this phase needs no extra RPC call just to get them (receipts below only
+    // run for the handful of tracked matches).
     const analyzed = analyzeBlock({ block, logs, tracked: trackedSet });
 
-    const receipts = new Map();
-    for (const txHash of analyzed.receiptHashes) {
-      const receipt = await ethGetTransactionReceipt({
-        baseUrl: this.env.RPC_RACER_BASE_URL,
-        chainId,
-        txHash: txHash as `0x${string}`,
-      });
-      if (receipt !== null) receipts.set(txHash, receipt);
-    }
+    const receipts = await ethGetTransactionReceipts({
+      baseUrl: this.env.RPC_RACER_BASE_URL,
+      chainId,
+      txHashes: [...new Set(analyzed.receiptHashes)] as `0x${string}`[],
+    });
 
     const observations = await finalizeBundles({
       chainId,

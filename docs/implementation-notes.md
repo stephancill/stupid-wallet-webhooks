@@ -65,6 +65,27 @@ D1-write work). Fix in `src/scanner/ScannerShard.ts` + `src/api/operator.ts`:
 - The unresolvable counter is stored in DO storage so it survives shard
   re-creation between alarms.
 
+### RPC batching for rpc-racer (cost)
+
+The scanner's per-block RPC churn is the biggest driver of rpc-racer Worker
+requests (~$7-8/mo at 6 chains). The scanner now collapses per-block calls into
+fewer HTTP requests:
+
+- **`block + logs` in one batch** — `fetchBlockAndLogs` (src/rpc/client.ts)
+  sends `eth_getBlockByNumber` + `eth_getLogs` as one JSON-RPC **batch** in a
+  single HTTP POST, halving the most common per-block request count (previously
+  two separate calls).
+- **batched receipts** — `ethGetTransactionReceipts` fetches all matched txs'
+  receipts for a block in one batch instead of one call per tx.
+- Corollary: `processBlock` now receives the logs from the scan loop (no
+  extra `eth_getLogs` call) and batches its receipts.
+- Requires rpc-racer to accept JSON-RPC **arrays** (new) — it validates a single
+  object today; batch is a small rpc-racer change (accept array, forward whole,
+  return array).
+
+Measured effect expected: rpc-racer requests per block drop from ~3 → ~1-2 and
+its request-cost falls to the $2-4/mo range at current 6-chain scale.
+
 ### Deployed resources (Cloudflare)
 
 - Worker: `address-notifications` → **https://wallet-webhooks.stupidtech.net** (custom domain; workers.dev disabled)

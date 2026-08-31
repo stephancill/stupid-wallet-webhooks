@@ -167,6 +167,122 @@ export async function ethGetBlockByNumber({
   return normalizeBlock(raw);
 }
 
+export type JsonRpcBatchItem = {
+  id: number;
+  method: string;
+  params: unknown[];
+};
+
+type JsonRpcBatchResponseItem = { id: unknown; result?: unknown; error?: { message?: string } };
+
+/**
+ * Send several JSON-RPC calls in a single HTTP POST (batch). rpc-racer forwards
+ * the whole array as one Worker request and returns the array, collapsing N HTTP
+ * round-trips into 1 (and thus N billable requests into 1).
+ */
+export async function jsonRpcBatch<
+  T extends Array<{ id: unknown; result?: unknown; error?: { message?: string } }>,
+>({
+  baseUrl,
+  chainId,
+  requests,
+  signal,
+}: {
+  baseUrl: string;
+  chainId: number | string;
+  requests: JsonRpcBatchItem[];
+  signal?: AbortSignal;
+}): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < RETRIES; attempt += 1) {
+    const controller = new AbortController();
+    const parent = signal;
+    const onAbort = () => controller.abort("aborted");
+    if (parent?.aborted) throw new Error("aborted");
+    parent?.addEventListener("abort", onAbort, { once: true });
+
+    const timeoutMs = BASE_TIMEOUT_MS * (attempt + 1);
+    const timeout = setTimeout(() => controller.abort("RPC timeout"), timeoutMs);
+    try {
+      const endpoint = ENDPOINT({ baseUrl, chainId });
+      const headers: Record<string, string> = { "content-type": "application/json" };
+      if (internalRpc !== null && internalRpc.secret !== "") {
+        headers["x-internal-secret"] = internalRpc.secret;
+      }
+      const body = JSON.stringify(
+        requests.map((r) => ({ jsonrpc: "2.0", method: r.method, params: r.params, id: r.id })),
+      );
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers,
+        body,
+        signal: controller.signal,
+      });
+      if (!response.ok && response.status !== 502) {
+        throw new Error(`RPC HTTP ${response.status}`);
+      }
+      const parsed = (await response.json()) as T;
+      if (!Array.isArray(parsed)) {
+        throw new Error("Expected a JSON-RPC batch response");
+      }
+      return parsed;
+    } catch (error) {
+      lastError = error;
+      if (parent?.aborted) throw error;
+      if (error instanceof Error && error.message === "aborted") throw error;
+      const isTimeout = error instanceof Error && error.name === "AbortError";
+      if (!isTimeout) {
+        await sleep(100 * 2 ** attempt);
+      }
+    } finally {
+      clearTimeout(timeout);
+      parent?.removeEventListener("abort", onAbort);
+    }
+  }
+  throw lastError;
+}
+
+/**
+ * Fetch a block and its logs in one batch HTTP request (instead of two). The
+ * block header + canonical hash comes back with logs for the same block number;
+ * logs are filtered to the block hash so a lagging upstream can't inject an
+ * unrelated/empty log set for the polled height.
+ */
+export async function fetchBlockAndLogs({
+  baseUrl,
+  chainId,
+  blockNumber,
+  signal,
+}: {
+  baseUrl: string;
+  chainId: number;
+  blockNumber: bigint;
+  signal?: AbortSignal;
+}): Promise<{ block: NormalizedBlock; logs: NormalizedLog[] }> {
+  const hex = `0x${blockNumber.toString(16)}`;
+  const responses = await jsonRpcBatch<JsonRpcBatchResponseItem[]>({
+    baseUrl,
+    chainId,
+    requests: [
+      { id: 1, method: "eth_getBlockByNumber", params: [hex, true] },
+      { id: 2, method: "eth_getLogs", params: [{ fromBlock: hex, toBlock: hex }] },
+    ],
+    signal,
+  });
+  const byId = new Map<number, JsonRpcBatchResponseItem>(responses.map((r) => [Number(r.id), r]));
+  const blockItem = byId.get(1);
+  const logsItem = byId.get(2);
+  if (blockItem?.result === undefined) {
+    throw new Error(`block ${blockNumber} not found`);
+  }
+  const block = normalizeBlock(blockItem.result as RpcBlock);
+  const logsRaw = Array.isArray(logsItem?.result) ? (logsItem.result as RpcLog[]) : [];
+  const logs = logsRaw
+    .filter((log) => log.blockHash.toLowerCase() === block.hash.toLowerCase())
+    .map(normalizeLog);
+  return { block, logs };
+}
+
 /** Fetches transfer logs for a specific block hash; rejects on any mismatch. */
 export async function ethGetLogs({
   baseUrl,
@@ -190,6 +306,39 @@ export async function ethGetLogs({
   return raw
     .filter((log) => log.blockHash.toLowerCase() === blockHash.toLowerCase())
     .map(normalizeLog);
+}
+
+/** Batch versions: fetch many receipts in one HTTP request. */
+export async function ethGetTransactionReceipts({
+  baseUrl,
+  chainId,
+  txHashes,
+  signal,
+}: {
+  baseUrl: string;
+  chainId: number;
+  txHashes: `0x${string}`[];
+  signal?: AbortSignal;
+}): Promise<Map<`0x${string}`, Receipt>> {
+  const responses = await jsonRpcBatch<JsonRpcBatchResponseItem[]>({
+    baseUrl,
+    chainId,
+    requests: txHashes.map((txHash, i) => ({
+      id: i + 1,
+      method: "eth_getTransactionReceipt",
+      params: [txHash],
+    })),
+    signal,
+  });
+  const byId = new Map<number, JsonRpcBatchResponseItem>(responses.map((r) => [Number(r.id), r]));
+  const out = new Map<`0x${string}`, Receipt>();
+  txHashes.forEach((txHash, i) => {
+    const res = byId.get(i + 1)?.result;
+    if (res !== undefined && res !== null) {
+      out.set(txHash.toLowerCase() as `0x${string}`, normalizeReceipt(res as RpcReceipt));
+    }
+  });
+  return out;
 }
 
 export async function ethGetTransactionReceipt({
