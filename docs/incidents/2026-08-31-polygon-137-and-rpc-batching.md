@@ -12,24 +12,28 @@ pilot service `https://wallet-webhooks.stupidtech.net`.
 - Along the way we found and fixed several **chain-stuck** recovery and correctness
   bugs (degraded-chain auto-re-anchor, D1 write coalescing, an empty-batch
   wedge, and a skip-poisoned-block guard).
-- **All chains except Polygon (137) are healthy** (lag 0, deliveries flowing).
-  **137 is currently wedged at `lag ~64`** (approximately `head − 64`) and the
-  code is already correct on it — this is the one open item.
+- Polygon's `lag 64` wedge was a lost-alarm bug after re-anchoring, not a
+  Polygon block parsing failure. Recovery now schedules its own continuation,
+  and scheduled reconciliation restores missing alarms for active chains.
 
 ## Summary of what changed (commits)
 
 `address-notifications` (main):
 
-| Commit | Purpose |
-| --- | --- |
-| `d3482b2` | Coalesce D1 cursor+head writes (cut D1 rows written ~order of magnitude) |
-| `781843e` | Unit guard for D1 coalescing |
-| `1f3ab4b` | Auto-recover `unresolvable`/degraded chains; operator `/re-anchor` |
-| `eabcd2e` | Fetch block+logs (and receipts) via rpc-racer **batch** |
-| `ae91c03` | Keep transfer-only topic filter in the batched fetch |
+| Commit    | Purpose                                                                   |
+| --------- | ------------------------------------------------------------------------- |
+| `d3482b2` | Coalesce D1 cursor+head writes (cut D1 rows written ~order of magnitude)  |
+| `781843e` | Unit guard for D1 coalescing                                              |
+| `1f3ab4b` | Auto-recover `unresolvable`/degraded chains; operator `/re-anchor`        |
+| `eabcd2e` | Fetch block+logs (and receipts) via rpc-racer **batch**                   |
+| `ae91c03` | Keep transfer-only topic filter in the batched fetch                      |
 | `2cb2d86` | Skip empty receipts batch (fixes a "match-less block wedges scanner" bug) |
-| `d6503ac` | Skip a persistently-failing block after N attempts (fetch-gap guard) |
-| `b38ffe5` | DO migration: delete+recreate `ScannerShard` to force current code |
+| `d6503ac` | Skip a persistently-failing block after N attempts (fetch-gap guard)      |
+| `a46b395` | Schedule catch-up after every successful re-anchor                        |
+| `32e5442` | Remove the invalid ScannerShard delete/recreate migration                 |
+| `0a6b0e1` | Reconcile missing active-chain alarms every five minutes                  |
+| `3db4196` | Flush the authoritative DO tip when a scan is already caught up           |
+| `446d2c5` | Replace stale past alarms instead of treating them as pending             |
 
 **rpc-racer** (main):
 
@@ -38,20 +42,19 @@ pilot service `https://wallet-webhooks.stupidtech.net`.
 
 ### New env knobs (address-notifications)
 
-| Var | Default | Meaning |
-| --- | --- | --- |
-| `SCANNER_CURSOR_D1_MS` | `8000` | Max cadence for persisting D1 cursor (coalescing) |
-| `SCANNER_UNRESOLVABLE_LIMIT` | `3` | Consecutive unresolvable scans before auto re-anchor |
-| `SCANNER_REANCHOR_DEPTH_BLOCKS` | `64` | Blocks behind head to re-anchor at |
-| `SCANNER_SKIP_BLOCK_FAILURES` | `5` | Skip a block after N consecutive failures (`0` disables) |
+| Var                             | Default | Meaning                                                  |
+| ------------------------------- | ------- | -------------------------------------------------------- |
+| `SCANNER_CURSOR_D1_MS`          | `8000`  | Max cadence for persisting D1 cursor (coalescing)        |
+| `SCANNER_UNRESOLVABLE_LIMIT`    | `3`     | Consecutive unresolvable scans before auto re-anchor     |
+| `SCANNER_REANCHOR_DEPTH_BLOCKS` | `64`    | Blocks behind head to re-anchor at                       |
+| `SCANNER_SKIP_BLOCK_FAILURES`   | `5`     | Skip a block after N consecutive failures (`0` disables) |
 
 ## Issue status
 
-| Chain | Status |
-| --- | --- |
-| 1 (Ethereum), 10 (Optimism), 100 (Gnosis), 8453 (Base) | **active, lag 0** |
-| 42161 (Arbitrum) | active, draining/backlog (was 20k+, trending down) |
-| **137 (Polygon)** | **active but pinned at `lag ~64`** — **OPEN** |
+| Chain                                                         | Status          |
+| ------------------------------------------------------------- | --------------- |
+| 1 (Ethereum), 10 (Optimism), 100 (Gnosis), 8453 (Base), 42161 | active, lag 0-3 |
+| **137 (Polygon)**                                             | active, lag 0   |
 
 `operator/metrics` delivers: `deliveries { pending: 0, success N, failed: 0,
 dead_lettered: 0 }` — no dead letters; webhooks flowing.
@@ -67,35 +70,54 @@ dead_lettered: 0 }` — no dead letters; webhooks flowing.
    fallback engages), verified 8/8 and 9/9 clean.
 2. **Scanner batching exposed the volume/cost** but also a real client bug: the
    initial `fetchBlockAndLogs` sent `eth_getLogs` **without a topics filter**,
-   returning *every* log (huge payloads, unfiltered matches) — fixed in `ae91c03`.
+   returning _every_ log (huge payloads, unfiltered matches) — fixed in `ae91c03`.
 3. **Empty-batch wedge:** `ethGetTransactionReceipts([])` sent an empty JSON-RPC
    batch, which rpc-racer rejects (`400 Empty JSON-RPC batch`). Any block with no
    tracked matches threw, and the scanner retried that block forever → chains
    accumulated big backlogs (fix `2cb2d86`).
 4. **Per-block save/wedge resilience:** `SCANNER_SKIP_BLOCK_FAILURES` now skips a
    block after N failures (re-anchor past it) so one poisoned block can't freeze a
-   chain (`d6503a`).
-5. **1337 specifically:** even after all fixes (incl. a forced DO delete/re-create,
-   deployed 18:08:52Z) it remains pinned at `head − 64`. So it is **not a
-   stale-code** issue. The tail/block after the cursor fails deterministically in
-   a way the 5-attempt skip isn't catching, or it self-located-loop at
-   `head−64` after each re-anchor. **We have not yet captured the shard's actual
-   error.**
+   chain (`d6503ac`).
+5. **Polygon's next block was valid.** The persisted cursor was block `92997278`
+   (`0xa109…de9`). Block `92997279` fetched cleanly; its parent was exactly that
+   cursor hash, and its 119 transactions / 382 Transfer logs produced no tracked
+   matches. Five internal fanout-5 batch requests returned the same block and log
+   set. There was no deterministic receipt, parser, or reorg error to capture.
+6. **The exact `lag 64` was the recovery anchor.** On the fifth block failure,
+   `recoverFromUnresolvable` saved `head − 64` as the new cursor, but neither it
+   nor the poisoned-block caller scheduled another alarm. The alarm invocation
+   then returned, leaving no future event that could scan `cursor + 1`.
+7. **A stale alarm defeated the first wake fix.** `schedule(0)` kept any existing
+   alarm with an earlier timestamp, including Polygon's dead timestamp in the
+   past. Cron `/wake` requests returned 200 but did not replace it. `schedule`
+   now preserves only future alarms; direct scans then showed the cursor advance
+   by roughly 100 blocks per pass and continue advancing from follow-up alarms.
+8. **Caught-up scans could leave D1 stale.** A fast catch-up inside the
+   eight-second coalescing window returned early on later no-work scans without
+   flushing the DO window tip. The caught-up path now stages and checkpoints the
+   authoritative DO tip, keeping operator lag honest.
+9. **The attempted DO reset never deployed.** Cloudflare rejects a
+   `deleted_classes = ["ScannerShard"]` migration while the class still has a
+   binding (`10061`). Removing that invalid migration unblocked deployment; DOs
+   receive current Worker code without being recreated.
 
-## Must-do next step (the open item)
+## Resolution
 
-Read the scanner's structured error for chain 137. The code already logs
-`scan block fetch failed [chain 137 block …]` / `scan error on chain 137 block …`.
-It is not surfacing via `wrangler tail` (DO alarm logs aren't in the tail stream).
-
-Options, in order of preference:
-1. **Enable Real-time Logs / Logpush** for `address-notifications` and filter for
-   `chain 137` to read the JSON exception — fastest to the root cause.
-2. Add a temporary `/operator` debug route that logs/tail the last shard error,
-   or a `console.error` amplification you can scrape.
-
-Once you know the throw, fix at the exact root (likely a receipt/parse/reorg or
-`eth_getLogs` edge on Polygon 137) and confirm via re-anchor → lag 0.
+- `recoverFromUnresolvable` now schedules a catch-up alarm after every successful
+  re-anchor, including automatic, poisoned-block, and operator-triggered paths.
+- The five-minute reconciliation cron sends a lightweight `/wake` request to
+  every active/degraded shard. It only restores an immediate alarm, so D1's
+  active chain registry now bounds recovery from a lost DO alarm to one cron
+  interval.
+- Alarm scheduling distinguishes future alarms from stale timestamps, and the
+  caught-up path checkpoints the DO cursor after the D1 write budget expires.
+- Tests cover post-re-anchor scheduling, missing-alarm restoration, and stale
+  past-alarm replacement. Full suite: 55 tests.
+- Live verification: one operator scan restarted the corrected alarm chain;
+  subsequent scans advanced without operator calls and reduced Polygon lag from
+  `3575` to `0`, finishing at cursor/head `93001748`. Deliveries remained healthy
+  (24 successful, zero pending/failed/dead-lettered), all chains ended at lag
+  `0-3`, and no chain/scanner alert remained.
 
 ### Repro (scope the 403 / batch serving)
 
@@ -109,6 +131,7 @@ curl -sS -D - -X POST 'https://evm.stupidtech.net/v1/137' -H 'content-type: appl
                  \"topics\":[\"0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef\"]}],\"id\":2}
   ]"
 ```
+
 Loop it 5-8 times; watch for intermittent 403 (keccak). The scanner uses the
 internal route `/internal/v1/137?fanoutCount=5` with `RPC_INTERNAL_SECRET`.
 
@@ -122,8 +145,9 @@ internal route `/internal/v1/137?fanoutCount=5` with `RPC_INTERNAL_SECRET`.
 
 - The scanner's raster batch cut per-block rpc-racer requests from ~3 to ~1-2,
   and the D1 cursor coalescing cut `address-notifications-db` rowsWritten ~4×
-  (live GraphQL baseline ~40k/hr → ~10k/hr). At 30-chain scale D1 was estimated
-  to approach/exceed the 50M rows-written bucket (~$77/mo) — the coalescing keeps
+  (live GraphQL baseline ~40k/hr → approximately 10k/hr). At 30-chain scale D1
+  was estimated to approach/exceed the 50M rows-written bucket (approximately
+  $77/mo) — the coalescing keeps
   it ~$0, and rpc-racer batching drops that contribution to ~$2-4/mo.
 - **KV**: the only namespace (`PROOF_BUNDLES`, 2 keys) is $0.
 
@@ -133,8 +157,8 @@ Account Analytics) — use the GraphQL datasets (`d1AnalyticsAdaptiveGroups`,
 
 ## Local / note
 
-- `bun test` (53 pass), `bun run lint`, `bunx tsc --noEmit` all green.
+- `bun test` (55 pass), `bun run lint`, `bunx tsc --noEmit` all green.
 - Pushes to `main` auto-deploy both workers via the Cloudflare GitHub integration
   (do not run `wrangler deploy` manually; migrations apply in the pipeline).
-- `b38ffe5` delete+recreate `ScannerShard` is a one-time migration; a re-pr` may
-  be needed after fixing 137's root cause to re-init that shard.
+- Do not reintroduce `b38ffe5`'s delete/recreate migration; it is invalid while
+  the deployment binds `ScannerShard`.

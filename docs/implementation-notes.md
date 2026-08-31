@@ -99,6 +99,11 @@ a binding to that class, so the migration never applied and blocked subsequent
 deployments. Existing objects remain under the valid `v1` migration and receive
 the current Worker code normally.
 
+Live result: after one operator scan restarted Polygon on the corrected build,
+its follow-up alarms drained the backlog autonomously from lag 3,575 to lag 0
+(cursor/head `93001748`). All six chains finished active at lag 0-3; deliveries
+were 24 successful with zero pending, failed, or dead-lettered.
+
 ### RPC batching for rpc-racer (cost)
 
 The scanner's per-block RPC churn is the biggest driver of rpc-racer Worker
