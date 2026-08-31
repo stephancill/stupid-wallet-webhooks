@@ -75,6 +75,12 @@ default). `recoverFromUnresolvable` now schedules the next catch-up scan itself,
 covering automatic, poisoned-block, and operator-triggered re-anchors. The
 scanner recovery test asserts that an alarm is set.
 
+Scheduled reconciliation also sends a lightweight `/wake` request to every
+active/degraded scanner shard. The request only restores an immediate DO alarm;
+it does not scan inline. This makes D1's active-chain registry a liveness source
+of truth and bounds recovery from any future lost alarm to the five-minute cron
+interval.
+
 The attempted `ScannerShard` delete/recreate migration was removed. Cloudflare
 rejects `deleted_classes = ["ScannerShard"]` while the deployment still contains
 a binding to that class, so the migration never applied and blocked subsequent

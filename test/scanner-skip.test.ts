@@ -112,4 +112,13 @@ describe("scanner skip-persistently-failing-block guard", () => {
       restore();
     }
   });
+
+  it("can restore a missing alarm without running a scan inline", async () => {
+    const { shard, alarms } = await makeShard({});
+    const response = await (shard as unknown as ScannerShard).fetch(
+      new Request("https://scanner.internal/wake", { method: "POST" }),
+    );
+    expect(response.status).toBe(200);
+    expect(alarms).toHaveLength(1);
+  });
 });

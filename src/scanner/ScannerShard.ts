@@ -88,6 +88,10 @@ export class ScannerShard {
       await this.scanChain(chainId);
       return json("ok", 200);
     }
+    if (url.pathname === "/wake" && request.method === "POST") {
+      await this.schedule(0);
+      return json("ok", 200);
+    }
     // Operator override: force re-anchoring to a recent head and rescan, even if
     // the consecutive-unresolvable threshold hasn't been reached.
     if (url.pathname === "/re-anchor") {
