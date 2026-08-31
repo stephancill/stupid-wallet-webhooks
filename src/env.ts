@@ -22,6 +22,8 @@ export type Env = {
   SCANNER_UNRESOLVABLE_LIMIT?: string;
   /** Blocks behind the head to re-anchor at when the cursor is unrecoverable (default 64). */
   SCANNER_REANCHOR_DEPTH_BLOCKS?: string;
+  /** Skip a block after this many consecutive failures (0 disables; default 5). */
+  SCANNER_SKIP_BLOCK_FAILURES?: string;
   SUBSCRIPTION_DEFAULT_QUOTA: string;
   CHAIN_DEFAULT_QUOTA: string;
   DELIVERY_LATENCY_ALERT_MS?: string;

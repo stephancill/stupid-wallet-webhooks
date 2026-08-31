@@ -51,6 +51,8 @@ export class ScannerShard {
   private pendingHead: number | null = null;
   /** Last epoch-ms we wrote the D1 cursor for this shard (cached, then DO-backed). */
   private cursorFlushAt: number | null = null;
+  /** Consecutive failures on the same block (drives the skip-a-poisoned-block guard). */
+  private blockFailures: { block: bigint; count: number } | null = null;
 
   constructor(state: DurableObjectState, env: Env) {
     this.state = state;
@@ -204,6 +206,7 @@ export class ScannerShard {
           `scan block fetch failed [chain ${chainId} block ${blockNumber}]`,
           String(error),
         );
+        if (await this.registerBlockFailure(chainId, blockNumber)) return;
         await this.schedule(this.catchUpMs());
         return;
       }
@@ -214,9 +217,11 @@ export class ScannerShard {
           await this.processBlock({ chainId, block, logs, trackedSet });
         } catch (error) {
           console.error(`scan error on chain ${chainId} block ${blockNumber}`, error);
+          if (await this.registerBlockFailure(chainId, blockNumber)) return;
           await this.schedule(this.catchUpMs());
           return;
         }
+        this.blockFailures = null;
         const held = {
           number: Number(block.number),
           hash: block.hash,
@@ -320,6 +325,48 @@ export class ScannerShard {
     return Number.isFinite(parsed) && parsed >= 0 ? parsed : 64;
   }
 
+  /** Skip a block that keeps failing after this many consecutive attempts (default 5; 0 disables). */
+  private skipBlockFailuresAfter(): number {
+    const parsed = Number.parseInt(this.env.SCANNER_SKIP_BLOCK_FAILURES ?? "", 10);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : 5;
+  }
+
+  /**
+   * Tracks per-block failures. Returns `true` only when a block has failed too
+   * many times and a recovery re-anchor was performed (the caller must then stop
+   * the scan pass). A persistent single-block failure (a poisoned/odd block or a
+   * one-off upstream bug) must not wedge the whole chain forever.
+   */
+  private async registerBlockFailure(chainId: number, blockNumber: bigint): Promise<boolean> {
+    const limit = this.skipBlockFailuresAfter();
+    if (limit <= 0) return false;
+    if (this.blockFailures === null || this.blockFailures.block !== blockNumber) {
+      this.blockFailures = { block: blockNumber, count: 0 };
+    }
+    this.blockFailures.count += 1;
+    if (this.blockFailures.count < limit) return false;
+
+    console.warn(
+      `chain ${chainId}: block ${String(blockNumber)} failed ${limit}x; skipping via re-anchor (gap)`,
+    );
+    this.blockFailures = null;
+    const head = await this.observeHead(chainId);
+    await this.recoverFromUnresolvable(chainId, head, {
+      depth: limit > 0 ? 0 : undefined,
+      reason: `gap: skipped persistently-failing block ${String(blockNumber)}`,
+    });
+    return true;
+  }
+
+  /** Best-effort current head (number) or 0 when the read fails. */
+  private async observeHead(chainId: number): Promise<number> {
+    try {
+      return Number(await ethBlockNumber({ baseUrl: this.env.RPC_RACER_BASE_URL, chainId }));
+    } catch {
+      return 0;
+    }
+  }
+
   /** Records just the observed head on an anomaly/early-return path (keeps lag honest). */
   private async persistHeadOnly(chainId: number, headBlock: number): Promise<void> {
     await setChainCursorAndHead(this.db, chainId, null, null, headBlock).catch(() => {
@@ -332,8 +379,13 @@ export class ScannerShard {
    * rescan the trailing window forward to the head. Lesser/older activity in the
    * deep gap is skipped (it was already unreachable while parked degraded).
    */
-  private async recoverFromUnresolvable(chainId: number, headBlock: number): Promise<void> {
-    const from = Math.max(1, headBlock - this.reanchorDepth());
+  private async recoverFromUnresolvable(
+    chainId: number,
+    headBlock: number,
+    opts: { depth?: number; reason?: string } = {},
+  ): Promise<void> {
+    const depth = opts.depth ?? this.reanchorDepth();
+    const from = Math.max(1, headBlock - depth);
     let anchorBlock: { number: number; hash: string; parentHash: string } | null = null;
     try {
       const raw = await ethGetBlockByNumber({
@@ -355,10 +407,10 @@ export class ScannerShard {
     await setChainCursorAndHead(this.db, chainId, anchorBlock.number, anchorBlock.hash, headBlock);
     await updateChainRegistryStatus(this.db, chainId, {
       status: "active",
-      reason: null,
+      reason: opts.reason ?? null,
     });
     console.log(
-      `re-anchored chain ${chainId} after unresolvable cursor: rescan from ${anchorBlock.number} to head ${headBlock}`,
+      `re-anchored chain ${chainId} after cursor gap: rescan from ${anchorBlock.number} to head ${headBlock}`,
     );
   }
 

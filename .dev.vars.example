@@ -12,3 +12,5 @@ RPC_SCANNER_FANOUT=2
 # SCANNER_UNRESOLVABLE_LIMIT=3
 # Blocks behind head to re-anchor at when a cursor is unrecoverable (default 64).
 # SCANNER_REANCHOR_DEPTH_BLOCKS=64
+# Skip a block after N consecutive failures (0 disables; default 5).
+# SCANNER_SKIP_BLOCK_FAILURES=5
