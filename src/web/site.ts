@@ -59,7 +59,8 @@ export const siteHtml = `<!DOCTYPE html>
   <p><em>* Supported chains depend on <a target="_blank" href="https://evm.stupidtech.net">evm.stupidtech.net</a> — a chain is supported when it resolves there.</em></p>
 
   <h2>Example event</h2>
-  <p>A signed delivery looks like this (hashes abbreviated):</p>
+  <p>A signed delivery looks like this (hashes abbreviated). The token contract
+  is on each effect as <code>assetAddress</code>:</p>
   <pre><code>{
   "id": "evt_2f3d…",
   "type": "activity.observed",
@@ -73,16 +74,27 @@ export const siteHtml = `<!DOCTYPE html>
       "hash": "0x198a0a…698",
       "index": 139,
       "from": "0xa0bfe1a0fc5b83d16e8599fd…e405",
-      "to": "0x00000000000000000000000000000000000dEaD",
+      "to": "0xb13c82346dee41783e008b87f526d962aa3602d9",
       "status": "success",
-      "value": "100000000000000"
+      "value": "0"
     },
-    "effects": []
+    "effects": [
+      {
+        "kind": "erc20",
+        "direction": "outgoing",
+        "logIndex": 277,
+        "from": "0xa0bfe1a0fc5b83d16e8599fd…e405",
+        "to": "0x377a…3d73",
+        "assetAddress": "0xb13c82346dee41783e008b87f526d962aa3602d9",
+        "amount": "3598000000000000000000"
+      }
+    ]
   }
 }</code></pre>
-  <p>For an exchange of a token, <code>data.effects</code> carries the decoded
-  <code>ERC-20</code> / <code>ERC-721</code> transfer with the asset, counterparty, and
-  amount (token ids for ERC-721).</p>
+  <p>Each token effect carries the <strong>token contract as <code>assetAddress</code></strong>
+  (<code>erc20</code> adds <code>amount</code>; <code>erc721</code> adds <code>tokenId</code>).
+  A pure native transfer has <code>effects: []</code> and <code>value</code> on the
+  <code>transaction</code>.</p>
 
   <h2>What we watch (and what we don't)</h2>
   <ul>
