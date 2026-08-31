@@ -2,6 +2,9 @@
 
 Milestone working notes for the Stupid Wallet Webhooks worker.
 
+> **Incident**: 2026-08-31 rpc-racer JSON-RPC batching + Polygon chain 137 stuck —
+> full handover in `docs/incidents/2026-08-31-polygon-137-and-rpc-batching.md`.
+
 ## Milestone 5 — Production deployment & pilot (in progress)
 
 ### Cost: D1 write reduction for the scanner (new)
