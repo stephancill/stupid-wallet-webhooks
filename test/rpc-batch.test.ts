@@ -77,6 +77,8 @@ describe("block+logs RPC batch", () => {
       "eth_getBlockByNumber",
       "eth_getLogs",
     ]);
+    // logs must keep the transfer-only topic filter (not every log in the block).
+    expect(parsedBody[1].params[0].topics).toEqual([TRANSFER_TOPIC]);
 
     expect(block.number).toBe(16n);
     expect(logs).toHaveLength(1);

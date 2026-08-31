@@ -265,7 +265,13 @@ export async function fetchBlockAndLogs({
     chainId,
     requests: [
       { id: 1, method: "eth_getBlockByNumber", params: [hex, true] },
-      { id: 2, method: "eth_getLogs", params: [{ fromBlock: hex, toBlock: hex }] },
+      // Keep the same topic filter as the non-batched path so we only pull
+      // transfer logs (not every log in the block).
+      {
+        id: 2,
+        method: "eth_getLogs",
+        params: [{ fromBlock: hex, toBlock: hex, topics: [TRANSFER_TOPIC] }],
+      },
     ],
     signal,
   });
