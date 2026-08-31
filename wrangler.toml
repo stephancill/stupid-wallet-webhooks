@@ -62,6 +62,9 @@ SCANNER_SHARD_COUNT = "2"
 SCANNER_MAX_BLOCKS_PER_PASS = "100"
 # Fastest catch-up poll cadence in ms while a backlog remains.
 SCANNER_MIN_POLL_INTERVAL_MS = "500"
+# Max cadence for persisting the scanner D1 cursor (ms); keeps D1 writes low on
+# fast-cadence chains. Default 8000.
+SCANNER_CURSOR_D1_MS = "8000"
 SUBSCRIPTION_DEFAULT_QUOTA = "1000"
 CHAIN_DEFAULT_QUOTA = "20"
 # Delivery-latency alert threshold in ms (observed→delivered p95). Default 10000.

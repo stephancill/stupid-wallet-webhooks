@@ -4,6 +4,41 @@ Milestone working notes for the Stupid Wallet Webhooks worker.
 
 ## Milestone 5 — Production deployment & pilot (in progress)
 
+### Cost: D1 write reduction for the scanner (new)
+
+Cost exercised via GraphQL analytics: `address-notifications` D1 writes are
+"dominated by `setChainCursor` — a `chain_registry` UPDATE fired once per
+scanned block (~564k rows/day across 4 chains; a single fast chain like
+Arbitrum ~0.25s blocks is ~345k/day). At 30 chains this linearly approaches/exceeds
+the **50M rows-written/month** D1 included quota (→ $1/1M past it).
+
+Fixes in `src/scanner/ScannerShard.ts`:
+
+- **Coalesce D1 cursor + head writes** — `pendingTip`/`pendingHead` +
+  `maybeFlushCursor()` persist `chain_registry.cursor` and `last_head_block` in
+  a single UPDATE at most once per `SCANNER_CURSOR_D1_MS` (new env, default
+  `8000`, in `wrangler.toml` / `.dev.vars.example`). This replaces the
+  per-block cursor UPDATE and the per-poll head UPDATE. Slow chains
+  (Ethereum ~12s) stay at their natural cadence; fast chains (~0.25–2s) drop
+  from per-block to ≤1 per 8s (roughly 4×–32×).
+- **Resume position is the DO block window, not D1 cursor** — so a throttled D1
+  cursor never causes blocks to be re-scanned (and their observations
+  re-enqueued). Falls back to the D1 cursor when the window is empty (cold start).
+- **Window persistence moved out of the block loop** — `saveWindow` now happens
+  once per scan pass (not once per block), cutting Durable Object storage writes
+  ~pass-length x.
+- **Idempotent fan-out guard** — `processBlock` enqueues a delivery only when
+  `upsertObservation` reports the row was newly created (`ON CONFLICT DO
+NOTHING`), so a rare mid-pass resume never double-delivers a webhook.
+
+Lag alert is time-based (`lagMs > 10s`), so an ≤8s D1-cursor staleness stays
+under the alert threshold; the operator lag metric remains accurate at D1
+granularity.
+
+**Result** — D1 cursor + window writes collapse to roughly ~10-14× their
+earlier volume on fast chains and ~unchanged on sparse chains. 30-chain D1
+estimate drops from ~$77/mo to ~$0-2 (under the 50M/mo bucket).
+
 ### Deployed resources (Cloudflare)
 
 - Worker: `address-notifications` → **https://wallet-webhooks.stupidtech.net** (custom domain; workers.dev disabled)
@@ -112,12 +147,12 @@ Milestone working notes for the Stupid Wallet Webhooks worker.
   - `observeToAttempt` ≈ **18.9s** — observation persisted → Webhook‑delivery
     queue consumer bid (i.e. the two‑queue fan‑out/fan‑out hop latency).
   - `attemptToDelivered` ≈ **0.8s** — the actual HMAC‑signed HTTP POST.
-  Together with the observed p95 of 19.6s, this proves the 10s-latency target is
-  not spent on scanning/signing/delivering — it is **the two sequential Cloudflare
-  Queues** (each ~8s of consumer polling cadence). Meeting the p95-within-10s exit
-  criterion with this two-queue architecture likely requires a high-freshness
-  single-queue delivery fast path (a real design tradeoff vs. the documented
-  decoupling) — flagged for a decision.
+    Together with the observed p95 of 19.6s, this proves the 10s-latency target is
+    not spent on scanning/signing/delivering — it is **the two sequential Cloudflare
+    Queues** (each ~8s of consumer polling cadence). Meeting the p95-within-10s exit
+    criterion with this two-queue architecture likely requires a high-freshness
+    single-queue delivery fast path (a real design tradeoff vs. the documented
+    decoupling) — flagged for a decision.
 
 **In-design latency tuning (measured)**: raised the queue consumers'
 `max_concurrency` (5/8) and lowered `max_batch_timeout` (2s/3s). Fresh Base

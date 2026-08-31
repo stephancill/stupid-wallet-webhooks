@@ -956,15 +956,24 @@ export async function setChainCursor(
     .run();
 }
 
-/** Records the most recently observed head so chain lag can be computed. */
-export async function setChainHead(
+/** Coalesced cursor+head write (one UPDATE) used by the scanner's D1 budget. */
+export async function setChainCursorAndHead(
   db: D1Database,
   chainId: number,
-  headBlock: number,
+  cursorBlock: number | null,
+  cursorHash: string | null,
+  headBlock: number | null,
 ): Promise<void> {
   await db
-    .prepare("UPDATE chain_registry SET last_head_block = ?, updated_at = ? WHERE chain_id = ?")
-    .bind(headBlock, nowISO(), chainId)
+    .prepare(
+      `UPDATE chain_registry
+       SET cursor_block = COALESCE(?, cursor_block),
+           cursor_hash = COALESCE(?, cursor_hash),
+           last_head_block = COALESCE(?, last_head_block),
+           updated_at = ?
+       WHERE chain_id = ?`,
+    )
+    .bind(cursorBlock, cursorHash, headBlock, nowISO(), chainId)
     .run();
 }
 

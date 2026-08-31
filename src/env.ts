@@ -16,6 +16,8 @@ export type Env = {
   SCANNER_MAX_BLOCKS_PER_PASS?: string;
   /** Fastest catch-up poll cadence in ms (default 1000). */
   SCANNER_MIN_POLL_INTERVAL_MS?: string;
+  /** Max D1 `cursor` persistence cadence in ms (default 8000). */
+  SCANNER_CURSOR_D1_MS?: string;
   SUBSCRIPTION_DEFAULT_QUOTA: string;
   CHAIN_DEFAULT_QUOTA: string;
   DELIVERY_LATENCY_ALERT_MS?: string;

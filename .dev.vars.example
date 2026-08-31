@@ -6,3 +6,5 @@ ALLOW_INSECURE_TEST_WEBHOOKS=0
 # If set, the scanner uses rpc-racer's private /internal route (low fan-out).
 RPC_INTERNAL_SECRET=
 RPC_SCANNER_FANOUT=2
+# Max D1 cursor persistence cadence in ms (coalesces cursor writes on fast chains).
+# SCANNER_CURSOR_D1_MS=8000

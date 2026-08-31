@@ -7,11 +7,11 @@ import {
   getChainRegistry,
   listTrackedAddressesForChain,
   setChainCursor,
+  setChainCursorAndHead,
   setActiveFromBlockForChain,
   upsertObservation,
   markBlockRevertedAndList,
   listEligibleSubscriptions,
-  setChainHead,
 } from "../db/repository";
 import { resolveChain } from "../rpc/chain";
 import {
@@ -44,6 +44,13 @@ export class ScannerShard {
   private state: DurableObjectState;
   private env: Env;
   private db: D1Database;
+
+  /** Highest successfully scanned block tip pending a D1 checkpoint. */
+  private pendingTip: { number: number; hash: string } | null = null;
+  /** Head observed this scan (flushed together with the cursor on a budget). */
+  private pendingHead: number | null = null;
+  /** Last epoch-ms we wrote the D1 cursor for this shard (cached, then DO-backed). */
+  private cursorFlushAt: number | null = null;
 
   constructor(state: DurableObjectState, env: Env) {
     this.state = state;
@@ -115,17 +122,23 @@ export class ScannerShard {
       await this.schedule(this.catchUpMs());
       return;
     }
-    await setChainHead(this.db, chainId, Number(head)).catch(() => {
-      /* best-effort */
-    });
+    // Coalesce the head write with the cursor checkpoint (no per-poll UPDATE).
+    this.pendingHead = Number(head);
 
     const chain = await getChainRegistry(this.db, chainId);
     if (chain?.status === "paused") {
       await this.schedule(30_000);
       return;
     }
-    const cursor = chain?.cursor_block === null ? null : (chain?.cursor_block ?? null);
-    const cursorHash = chain?.cursor_hash ?? null;
+
+    // Resume position. The Durable Object's block window is authoritative and
+    // current; the D1 cursor is only a coarse checkpoint persisted on a budget
+    // (see `maybeFlushCursor`). Prefer the window so a throttled D1 cursor never
+    // causes blocks to be re-scanned (and their observations re-enqueued).
+    let window = await this.loadWindow();
+    const windowTip = window.length > 0 ? window[window.length - 1] : null;
+    const cursor = windowTip ? windowTip.number : (chain?.cursor_block ?? null);
+    const cursorHash = windowTip ? windowTip.hash : (chain?.cursor_hash ?? null);
 
     // First activation: anchor the cursor at the head (real hash) and set it as
     // the tip of the rolling window.
@@ -136,11 +149,11 @@ export class ScannerShard {
         blockNumber: head,
         includeTransactions: false,
       });
+      window = [{ number: Number(head), hash: headBlock.hash, parentHash: headBlock.parentHash }];
+      this.pendingTip = { number: Number(head), hash: headBlock.hash };
       await setChainCursor(this.db, chainId, Number(head), headBlock.hash);
       await setActiveFromBlockForChain(this.db, chainId, Number(head) + 1);
-      await this.saveWindow([
-        { number: Number(head), hash: headBlock.hash, parentHash: headBlock.parentHash },
-      ]);
+      await this.saveWindow(window);
       await this.schedule(
         pollInterval(head, chain?.block_speed_ms ?? null, this.catchUpMs(), MAX_POLL_INTERVAL_MS),
       );
@@ -156,7 +169,6 @@ export class ScannerShard {
       return;
     }
 
-    let window = await this.loadWindow();
     let processed = 0;
     let blockNumber = start;
     let lastHash = cursorHash;
@@ -183,9 +195,11 @@ export class ScannerShard {
           parentHash: block.parentHash,
         };
         window = pushWindow(window, held);
-        await this.saveWindow(window);
         lastHash = block.hash;
-        await setChainCursor(this.db, chainId, Number(block.number), block.hash);
+        // Persist the cursor to D1 on a time budget (not per block) and defer the
+        // durable window write to the end of the pass.
+        this.pendingTip = { number: Number(block.number), hash: block.hash };
+        await this.maybeFlushCursor();
         blockNumber += 1n;
         processed += 1;
       } else if (verdict.kind === "reorg") {
@@ -230,6 +244,11 @@ export class ScannerShard {
         return;
       }
     }
+
+    // Durably persist the accepted window (the Durable Object's authoritative
+    // cursor). The D1 checkpoint remains time-budgeted via `maybeFlushCursor`.
+    await this.saveWindow(window);
+    await this.maybeFlushCursor();
 
     const nextInterval =
       processed >= this.maxBlocksPerPass()
@@ -294,21 +313,25 @@ export class ScannerShard {
         initiator: observation.transaction.from,
         payload: JSON.stringify(observationData(observation)),
       });
-      // Enqueue every matched observation (bundles -> queue in M3).
-      void inserted;
-      await enqueueMatched({
-        queue: this.env.MATCHED_ACTIVITY_QUEUE,
-        observations: [
-          {
-            observationId: observation.observationId,
-            chainId: observation.chainId,
-            txHash: observation.transaction.hash,
-            trackedAddress: observation.trackedAddress,
-            blockNumber: observation.blockNumber,
-            blockHash: observation.blockHash,
-          },
-        ],
-      });
+      // Enqueue only observations we actually created. `upsertObservation` is
+      // idempotent (DO NOTHING on the deterministic id); when a resume / retry
+      // reprocesses an already-persisted observation, skip the enqueue so we never
+      // re-deliver a webhook for the same (chainId, tx, address, blockHash) event.
+      if (inserted) {
+        await enqueueMatched({
+          queue: this.env.MATCHED_ACTIVITY_QUEUE,
+          observations: [
+            {
+              observationId: observation.observationId,
+              chainId: observation.chainId,
+              txHash: observation.transaction.hash,
+              trackedAddress: observation.trackedAddress,
+              blockNumber: observation.blockNumber,
+              blockHash: observation.blockHash,
+            },
+          ],
+        });
+      }
     }
   }
 
@@ -327,6 +350,39 @@ export class ScannerShard {
   private maxBlocksPerPass(): number {
     const parsed = Number.parseInt(this.env.SCANNER_MAX_BLOCKS_PER_PASS ?? "", 10);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : 100;
+  }
+
+  /** Max cadence (ms) for persisting the D1 cursor, even for very fast chains. */
+  private cursorFlushIntervalMs(): number {
+    const parsed = Number.parseInt(this.env.SCANNER_CURSOR_D1_MS ?? "", 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 8000;
+  }
+
+  /**
+   * Coalesce D1 `chain_registry.cursor` writes. Between alarm passes the
+   * Durable Object's own block window is the authoritative cursor, so D1 only
+   * needs a coarse checkpoint bounded by `SCANNER_CURSOR_D1_MS`. This collapses
+   * the per-block UPDATE that was the dominant D1 write on fast-cadence chains
+   * (e.g. Arbitrum ~0.25s blocks) while leaving sparse chains (Ethereum ~12s)
+   * effectively at their natural cadence.
+   */
+  private async maybeFlushCursor(): Promise<void> {
+    if (!this.pendingTip && this.pendingHead === null) return;
+    const now = Date.now();
+    if (this.cursorFlushAt === null) {
+      const stored = await this.state.storage.get<number>("cursorFlushAt");
+      this.cursorFlushAt = typeof stored === "number" ? stored : 0;
+    }
+    if (now - this.cursorFlushAt < this.cursorFlushIntervalMs()) return;
+    await setChainCursorAndHead(
+      this.db,
+      this.chainId(),
+      this.pendingTip?.number ?? null,
+      this.pendingTip?.hash ?? null,
+      this.pendingHead ?? null,
+    );
+    this.cursorFlushAt = now;
+    await this.state.storage.put("cursorFlushAt", now);
   }
 
   /** Fastest poll cadence while a backlog remains (env, default 500ms). */
