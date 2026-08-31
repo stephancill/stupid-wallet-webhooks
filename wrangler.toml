@@ -30,17 +30,6 @@ class_name = "ScannerShard"
 tag = "v1"
 new_sqlite_classes = ["ScannerShard"]
 
-# Force the ScannerShard Durable Objects to the current code (delete-then-recreate).
-# Every chain re-syncs from its D1 `chain_registry.cursor`, so this is a safe
-# roll-forward; it clears the shards' ephemeral DO state.
-[[migrations]]
-tag = "v2-resync-scanners"
-deleted_classes = ["ScannerShard"]
-
-[[migrations]]
-tag = "v3-resync-scanners"
-new_sqlite_classes = ["ScannerShard"]
-
 [[queues.producers]]
 binding = "MATCHED_ACTIVITY_QUEUE"
 queue = "matched-activity"

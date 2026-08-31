@@ -75,6 +75,12 @@ default). `recoverFromUnresolvable` now schedules the next catch-up scan itself,
 covering automatic, poisoned-block, and operator-triggered re-anchors. The
 scanner recovery test asserts that an alarm is set.
 
+The attempted `ScannerShard` delete/recreate migration was removed. Cloudflare
+rejects `deleted_classes = ["ScannerShard"]` while the deployment still contains
+a binding to that class, so the migration never applied and blocked subsequent
+deployments. Existing objects remain under the valid `v1` migration and receive
+the current Worker code normally.
+
 ### RPC batching for rpc-racer (cost)
 
 The scanner's per-block RPC churn is the biggest driver of rpc-racer Worker
