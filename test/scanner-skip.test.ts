@@ -34,9 +34,11 @@ async function makeShard(envOverrides: Record<string, string>) {
         storage.set(k, v);
       },
       async getAlarm() {
-        return undefined;
+        const alarm = storage.get("alarm");
+        return typeof alarm === "number" ? alarm : undefined;
       },
       async setAlarm(at: number) {
+        storage.set("alarm", at);
         alarms.push(at);
       },
     },
@@ -51,7 +53,7 @@ async function makeShard(envOverrides: Record<string, string>) {
     blockFailures: { block: bigint; count: number } | null;
     registerBlockFailure(chainId: number, blockNumber: bigint): Promise<boolean>;
   };
-  return { shard, db, alarms };
+  return { shard, db, alarms, storage };
 }
 
 function mockRpcFetch(): () => void {
@@ -120,5 +122,16 @@ describe("scanner skip-persistently-failing-block guard", () => {
     );
     expect(response.status).toBe(200);
     expect(alarms).toHaveLength(1);
+  });
+
+  it("replaces a stale past alarm", async () => {
+    const { shard, alarms, storage } = await makeShard({});
+    storage.set("alarm", Date.now() - 1_000);
+    const response = await (shard as unknown as ScannerShard).fetch(
+      new Request("https://scanner.internal/wake", { method: "POST" }),
+    );
+    expect(response.status).toBe(200);
+    expect(alarms).toHaveLength(1);
+    expect(alarms[0]!).toBeGreaterThan(Date.now() - 1_000);
   });
 });

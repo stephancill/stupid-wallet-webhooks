@@ -81,14 +81,17 @@ it does not scan inline. This makes D1's active-chain registry a liveness source
 of truth and bounds recovery from any future lost alarm to the five-minute cron
 interval.
 
+Polygon exposed one more alarm edge: `schedule` kept any existing alarm whose
+timestamp was earlier than the requested time, including a stale timestamp in
+the past. `/wake` therefore returned successfully without replacing Polygon's
+dead alarm. The comparison now preserves only future alarms; a unit test seeds a
+past alarm and verifies that `/wake` replaces it.
+
 The caught-up scan path now checkpoints the authoritative DO window tip before
 returning. Previously, a 64-block re-anchor could be scanned in less than the
 eight-second D1 coalescing interval; later no-work scans returned before
 `maybeFlushCursor`, leaving operator lag permanently pinned at the old anchor
 even when the DO cursor had advanced.
-
-Temporary chain-137-only phase logging is deployed while the live shard is
-verified; remove it once the post-wake exit path is confirmed.
 
 The attempted `ScannerShard` delete/recreate migration was removed. Cloudflare
 rejects `deleted_classes = ["ScannerShard"]` while the deployment still contains
