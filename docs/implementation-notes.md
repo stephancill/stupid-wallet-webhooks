@@ -81,6 +81,12 @@ it does not scan inline. This makes D1's active-chain registry a liveness source
 of truth and bounds recovery from any future lost alarm to the five-minute cron
 interval.
 
+The caught-up scan path now checkpoints the authoritative DO window tip before
+returning. Previously, a 64-block re-anchor could be scanned in less than the
+eight-second D1 coalescing interval; later no-work scans returned before
+`maybeFlushCursor`, leaving operator lag permanently pinned at the old anchor
+even when the DO cursor had advanced.
+
 The attempted `ScannerShard` delete/recreate migration was removed. Cloudflare
 rejects `deleted_classes = ["ScannerShard"]` while the deployment still contains
 a binding to that class, so the migration never applied and blocked subsequent

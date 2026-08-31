@@ -160,6 +160,9 @@ export class ScannerShard {
     const windowTip = window.length > 0 ? window[window.length - 1] : null;
     const cursor = windowTip ? windowTip.number : (chain?.cursor_block ?? null);
     const cursorHash = windowTip ? windowTip.hash : (chain?.cursor_hash ?? null);
+    if (windowTip !== null) {
+      this.pendingTip = { number: windowTip.number, hash: windowTip.hash };
+    }
 
     // First activation: anchor the cursor at the head (real hash) and set it as
     // the tip of the rolling window.
@@ -184,6 +187,10 @@ export class ScannerShard {
     const start = BigInt(cursor) + 1n;
     const end = head;
     if (start > end) {
+      // A fast catch-up can finish inside the D1 coalescing interval. Once no
+      // new block remains, still flush the authoritative DO tip when its budget
+      // expires instead of leaving D1 pinned at the old re-anchor forever.
+      await this.maybeFlushCursor();
       await this.schedule(
         pollInterval(head, chain?.block_speed_ms ?? null, this.catchUpMs(), MAX_POLL_INTERVAL_MS),
       );
