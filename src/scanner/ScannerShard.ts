@@ -113,6 +113,7 @@ export class ScannerShard {
   async alarm(): Promise<void> {
     const chainId = this.chainId();
     if (Number.isNaN(chainId)) return;
+    if (chainId === 137) console.log("scanner diagnostic: chain 137 alarm entered");
     await this.scanChain(chainId);
   }
 
@@ -129,6 +130,9 @@ export class ScannerShard {
       setInternalRpc({ secret, fanout: Number.isFinite(fanout) && fanout > 0 ? fanout : 2 });
     }
     const tracked = await listTrackedAddressesForChain(this.db, chainId);
+    if (chainId === 137) {
+      console.log(`scanner diagnostic: chain 137 tracked=${tracked.length}`);
+    }
     if (tracked.length === 0) {
       await this.schedule(this.catchUpMs());
       return;
@@ -160,6 +164,11 @@ export class ScannerShard {
     const windowTip = window.length > 0 ? window[window.length - 1] : null;
     const cursor = windowTip ? windowTip.number : (chain?.cursor_block ?? null);
     const cursorHash = windowTip ? windowTip.hash : (chain?.cursor_hash ?? null);
+    if (chainId === 137) {
+      console.log(
+        `scanner diagnostic: chain 137 head=${String(head)} cursor=${String(cursor)} window=${window.length}`,
+      );
+    }
     if (windowTip !== null) {
       this.pendingTip = { number: windowTip.number, hash: windowTip.hash };
     }
@@ -187,6 +196,7 @@ export class ScannerShard {
     const start = BigInt(cursor) + 1n;
     const end = head;
     if (start > end) {
+      if (chainId === 137) console.log("scanner diagnostic: chain 137 caught up");
       // A fast catch-up can finish inside the D1 coalescing interval. Once no
       // new block remains, still flush the authoritative DO tip when its budget
       // expires instead of leaving D1 pinned at the old re-anchor forever.

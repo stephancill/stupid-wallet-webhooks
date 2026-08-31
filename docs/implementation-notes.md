@@ -87,6 +87,9 @@ eight-second D1 coalescing interval; later no-work scans returned before
 `maybeFlushCursor`, leaving operator lag permanently pinned at the old anchor
 even when the DO cursor had advanced.
 
+Temporary chain-137-only phase logging is deployed while the live shard is
+verified; remove it once the post-wake exit path is confirmed.
+
 The attempted `ScannerShard` delete/recreate migration was removed. Cloudflare
 rejects `deleted_classes = ["ScannerShard"]` while the deployment still contains
 a binding to that class, so the migration never applied and blocked subsequent
