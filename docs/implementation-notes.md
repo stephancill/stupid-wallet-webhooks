@@ -50,13 +50,19 @@ request per block. Now:
   blocks plus their `Transfer` logs in ONE JSON-RPC batch (2 items/block). The
   scanner prefetches the whole per-pass window, then classifies/processes blocks
   sequentially, keeping parent-hash continuity checks and stop-on-reorg behavior.
-  Blocks orphaned *after* prefetch are handled by the existing in-window replay /
+  Blocks orphaned _after_ prefetch are handled by the existing in-window replay /
   fallback single-block path.
 - New env knobs: `SCANNER_SETTLED_POLL_INTERVAL_MS`, `SCANNER_MAX_BLOCKS_PER_RANGE`
   (in `wrangler.toml` and `src/env.ts`). The old `pollInterval` helper is replaced
   by `settledPollInterval`.
 - `test/rpc-batch.test.ts` adds a range-batch test (2 items/block, ordered
   results, per-block-hash log filtering).
+
+2026-09-04 (follow-up): bumped `SCANNER_MIN_POLL_INTERVAL_MS` default 500ms → 1000ms
+so even a backlog spares poll churn; caught-up chains already honor the
+`SCANNER_SETTLED_POLL_INTERVAL_MS` (2000ms) floor. The metrics-DO coalesce window
+on the rpc-racer side was also widened to 60s with a per-(chain,method) latency
+sample cap (that repo's notes).
 
 Expected effect at current scale: Arbitrum scanner RPC traffic (half of total)
 drops from ~876k/48h to nearer ~1 batch per 2s (plus the head read), and settled

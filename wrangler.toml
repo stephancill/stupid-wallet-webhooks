@@ -67,7 +67,7 @@ SCANNER_SHARD_COUNT = "2"
 # high-throughput chains like Arbitrum catch up after activation).
 SCANNER_MAX_BLOCKS_PER_PASS = "100"
 # Fastest catch-up poll cadence in ms while a backlog remains.
-SCANNER_MIN_POLL_INTERVAL_MS = "500"
+SCANNER_MIN_POLL_INTERVAL_MS = "1000"
 # Minimum cadence between alarms while a chain is caught up (no backlog).
 SCANNER_SETTLED_POLL_INTERVAL_MS = "2000"
 # Max consecutive blocks fetched per rpc-racer range batch.
