@@ -7,6 +7,65 @@ Milestone working notes for the Stupid Wallet Webhooks worker.
 
 ## Milestone 5 — Production deployment & pilot (in progress)
 
+### Cost: rpc-racer service binding + settled-range polling (new)
+
+Approved 2026-09-04; targets the two dominant Cloudflare costs from the 48-hour
+usage review (see `docs/handover.md → Approved cost-reduction work`).
+
+#### Service binding for the scanner
+
+The scanner previously reached rpc-racer over **external HTTPS** to
+`https://evm.stupidtech.net/internal/…` (`x-internal-secret`). This is now a real
+Cloudflare **service binding** (`RPC_RACER`), so internal Worker-to-Worker calls
+no longer incur an additional request fee.
+
+- `wrangler.toml` adds `[[services]]` binding `RPC_RACER` → `rpc-racer`.
+- `src/env.ts`: `Env.RPC_RACER?: Fetcher` (added to `ScannerEnv` pick).
+- `src/rpc/client.ts`: `setInternalRpc` accepts an optional `fetcher`; when set,
+  `jsonRpc`/`jsonRpcBatch` call `fetcher.fetch()` against an internal
+  `https://rpc-racer.internal/internal/v1/:chain?fanoutCount=N` URL (no external
+  egress / no extra Worker-invocation fee). Without a fetcher (local/fork/tests)
+  the previous private-HTTP path is retained.
+- `src/rpc/chain.ts`: `resolveChain` accepts an optional `fetcher` and routes the
+  chain-metadata lookup through the binding when present.
+- `src/scanner/ScannerShard.ts` threads `env.RPC_RACER` into `setInternalRpc` and
+  both `resolveChain` call sites.
+- `test/rpc-bound.test.ts` now proves a configured fetcher routes through the
+  internal service URL and that `globalThis.fetch` is never hit.
+
+This removes the ~1.8M externally routed scanner requests/48h from the billable
+Worker-request path.
+
+#### Settled cadence + bounded range prefetch
+
+Previously the scanner polled at **half the block interval with a 500ms floor**,
+so fast chains (Arbitrum at 250ms blocks) polled at 500ms and issued ~1 rpc-racer
+request per block. Now:
+
+- **Settled polling**: `settledPollInterval()` schedules caught-up scans at
+  `max(blockSpeedMs, SCANNER_SETTLED_POLL_INTERVAL_MS)` (default **2000ms**).
+  Backlog catch-up still uses the 500ms `SCANNER_MIN_POLL_INTERVAL_MS` cadence.
+- **Range prefetch**: `fetchBlocksAndLogsByRange` (new in `src/rpc/client.ts`)
+  fetches up to `SCANNER_MAX_BLOCKS_PER_RANGE` (default **10**) consecutive
+  blocks plus their `Transfer` logs in ONE JSON-RPC batch (2 items/block). The
+  scanner prefetches the whole per-pass window, then classifies/processes blocks
+  sequentially, keeping parent-hash continuity checks and stop-on-reorg behavior.
+  Blocks orphaned *after* prefetch are handled by the existing in-window replay /
+  fallback single-block path.
+- New env knobs: `SCANNER_SETTLED_POLL_INTERVAL_MS`, `SCANNER_MAX_BLOCKS_PER_RANGE`
+  (in `wrangler.toml` and `src/env.ts`). The old `pollInterval` helper is replaced
+  by `settledPollInterval`.
+- `test/rpc-batch.test.ts` adds a range-batch test (2 items/block, ordered
+  results, per-block-hash log filtering).
+
+Expected effect at current scale: Arbitrum scanner RPC traffic (half of total)
+drops from ~876k/48h to nearer ~1 batch per 2s (plus the head read), and settled
+alarm cadence on fast chains rises from 500ms → 2s.
+
+The rpc-racer telemetry half of this work (Analytics Engine + coalesced
+DurableObject /stats writes) is tracked in the rpc-racer repo's
+`docs/implementation-notes.md`.
+
 ### Cost: D1 write reduction for the scanner (new)
 
 Cost exercised via GraphQL analytics: `address-notifications` D1 writes are
