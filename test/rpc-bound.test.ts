@@ -17,6 +17,52 @@ describe("RPC endpoint selection (bound-Worker internal route)", () => {
     );
   });
 
+  it("uses a rpc-racer.internal service-bound URL when a fetcher is configured", () => {
+    setInternalRpc({ secret: "s", fanout: 3, fetcher: {} as Fetcher });
+    expect(ENDPOINT({ baseUrl: "https://evm.stupidtech.net/", chainId: 10 })).toBe(
+      "https://rpc-racer.internal/internal/v1/10?fanoutCount=3",
+    );
+  });
+
+  it("routes JSON-RPC through the service-binding fetcher when provided", async () => {
+    const calls: Array<{ url: string; headers: Headers; body: string }> = [];
+    const fetcher = {
+      fetch: async (input: string, init?: RequestInit) => {
+        calls.push({
+          url: String(input),
+          headers: new Headers(init?.headers),
+          body: String(init?.body),
+        });
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: "0x5" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    } as unknown as Fetcher;
+    const origFetch = globalThis.fetch;
+    let globalFetchCalled = 0;
+    globalThis.fetch = (async () => {
+      globalFetchCalled += 1;
+      return new Response("unexpected", { status: 500 });
+    }) as unknown as typeof fetch;
+    setInternalRpc({ secret: "s3cr3t", fanout: 3, fetcher });
+    try {
+      const head = await jsonRpc({
+        baseUrl: "https://evm.stupidtech.net",
+        chainId: 8453,
+        method: "eth_blockNumber",
+        params: [],
+      });
+      expect(head).toBe("0x5");
+      expect(globalFetchCalled).toBe(0);
+      expect(calls).toHaveLength(1);
+      expect(calls[0].url).toMatch(/^https:\/\/rpc-racer\.internal\/internal\/v1\/8453/);
+      expect(calls[0].headers.get("x-internal-secret")).toBe("s3cr3t");
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  });
+
   it("falls back to the public /v1/ route when no internal config is active", () => {
     setInternalRpc(null);
     expect(ENDPOINT({ baseUrl: "https://evm.stupidtech.net", chainId: 10 })).toBe(

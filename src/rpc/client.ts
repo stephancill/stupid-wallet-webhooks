@@ -29,11 +29,25 @@ const BASE_TIMEOUT_MS = 5_000;
  * scanner config is enabled (shared secret + low fan-out) we target rpc-racer's
  * `/internal/v1/:chainId` route, which bypasses the public per-IP rate limit.
  */
-type InternalRpcConfig = { secret: string; fanout: number };
+type InternalRpcConfig = { secret: string; fanout: number; fetcher?: Fetcher };
 let internalRpc: InternalRpcConfig | null = null;
 
 export function setInternalRpc(config: InternalRpcConfig | null): void {
   internalRpc = config;
+}
+
+/**
+ * Resolves which `fetch` to use for a JSON-RPC request. When a service-binding
+ * fetcher is active it is used (no external egress / no extra request fee);
+ * otherwise the request goes through the global client (local / fork tooling or
+ * the pre-binding HTTP path).
+ */
+function rpcFetch(endpoint: string, init: RequestInit): Promise<Response> {
+  const fetcher = internalRpc?.fetcher;
+  if (fetcher !== undefined) {
+    return fetcher.fetch(endpoint, init);
+  }
+  return fetch(endpoint, init);
 }
 
 export function ENDPOINT({
@@ -51,6 +65,11 @@ export function ENDPOINT({
   }
   const base = baseUrl.replace(/\/$/, "");
   if (internalRpc !== null) {
+    // Service-binding transport reaches the private route without extra request
+    // fees; when no fetcher is configured we keep the private HTTP path.
+    if (internalRpc.fetcher !== undefined) {
+      return `https://rpc-racer.internal/internal/v1/${chainId}?fanoutCount=${internalRpc.fanout}`;
+    }
     return `${base}/internal/v1/${chainId}?fanoutCount=${internalRpc.fanout}`;
   }
   return `${base}/v1/${chainId}`;
@@ -87,7 +106,7 @@ export async function jsonRpc<T>({
       if (internalRpc !== null && internalRpc.secret !== "") {
         headers["x-internal-secret"] = internalRpc.secret;
       }
-      const response = await fetch(endpoint, {
+      const response = await rpcFetch(endpoint, {
         method: "POST",
         headers,
         body: JSON.stringify({ jsonrpc: "2.0", method, params, id }),
@@ -212,7 +231,7 @@ export async function jsonRpcBatch<
       const body = JSON.stringify(
         requests.map((r) => ({ jsonrpc: "2.0", method: r.method, params: r.params, id: r.id })),
       );
-      const response = await fetch(endpoint, {
+      const response = await rpcFetch(endpoint, {
         method: "POST",
         headers,
         body,
@@ -287,6 +306,71 @@ export async function fetchBlockAndLogs({
     .filter((log) => log.blockHash.toLowerCase() === block.hash.toLowerCase())
     .map(normalizeLog);
   return { block, logs };
+}
+
+export type BlockAndLogs = {
+  block: NormalizedBlock;
+  logs: NormalizedLog[];
+};
+
+/**
+ * Fetches a bounded range of consecutive blocks and their Transfer logs in ONE
+ * JSON-RPC batch (2 items per block), so the scanner's block reads collapse
+ * rpc-racer Worker requests from ~1 per new block to ~1 per range. Blocks are
+ * returned in ascending order; logs are filtered to each block's exact hash.
+ */
+export async function fetchBlocksAndLogsByRange({
+  baseUrl,
+  chainId,
+  fromBlock,
+  toBlock,
+  signal,
+}: {
+  baseUrl: string;
+  chainId: number;
+  fromBlock: bigint;
+  toBlock: bigint;
+  signal?: AbortSignal;
+}): Promise<BlockAndLogs[]> {
+  const count = Number(toBlock - fromBlock) + 1;
+  if (count <= 0) return [];
+
+  const requests: JsonRpcBatchItem[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const hex = `0x${(fromBlock + BigInt(index)).toString(16)}`;
+    requests.push({ id: index * 2 + 1, method: "eth_getBlockByNumber", params: [hex, true] });
+    requests.push({
+      id: index * 2 + 2,
+      method: "eth_getLogs",
+      params: [{ fromBlock: hex, toBlock: hex, topics: [TRANSFER_TOPIC] }],
+    });
+  }
+
+  const responses = await jsonRpcBatch<JsonRpcBatchResponseItem[]>({
+    baseUrl,
+    chainId,
+    requests,
+    signal,
+  });
+  const byId = new Map<number, JsonRpcBatchResponseItem>(responses.map((r) => [Number(r.id), r]));
+
+  const out: BlockAndLogs[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const blockNumber = fromBlock + BigInt(index);
+    const blockRaw = byId.get(index * 2 + 1)?.result;
+    if (blockRaw === undefined || blockRaw === null) {
+      throw new Error(`block ${blockNumber} not found`);
+    }
+    const block = normalizeBlock(blockRaw as RpcBlock);
+    const logsRaw = Array.isArray(byId.get(index * 2 + 2)?.result)
+      ? (byId.get(index * 2 + 2)?.result as RpcLog[])
+      : [];
+    const logs = logsRaw
+      .filter((log) => log.blockHash.toLowerCase() === block.hash.toLowerCase())
+      .map(normalizeLog);
+    out.push({ block, logs });
+  }
+  return out;
 }
 
 /** Fetches transfer logs for a specific block hash; rejects on any mismatch. */

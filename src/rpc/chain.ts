@@ -26,14 +26,19 @@ export type ChainResolveResult =
 export async function resolveChain({
   baseUrl,
   chainId,
+  fetcher,
   signal,
 }: {
   baseUrl: string;
   chainId: number | string;
+  fetcher?: Fetcher;
   signal?: AbortSignal;
 }): Promise<ChainResolveResult> {
   try {
-    const response = await fetch(`${baseUrl.replace(/\/$/, "")}/v1/chains/${chainId}`, {
+    const url = `${baseUrl.replace(/\/$/, "")}/v1/chains/${chainId}`;
+    const doFetch = (input: string, init?: RequestInit) =>
+      fetcher !== undefined ? fetcher.fetch(input, init) : fetch(input, init);
+    const response = await doFetch(url, {
       headers: { accept: "application/json" },
       signal,
     });

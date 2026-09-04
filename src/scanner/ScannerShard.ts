@@ -20,6 +20,7 @@ import {
   ethGetTransactionReceipts,
   setInternalRpc,
   fetchBlockAndLogs,
+  fetchBlocksAndLogsByRange,
 } from "../rpc/client";
 import { analyzeBlock, finalizeBundles, observationData } from "../domain/activity";
 import { classifyChain, pushWindow, pruneTo, type HeldBlock } from "../domain/reorg";
@@ -126,7 +127,11 @@ export class ScannerShard {
     const secret = this.env.RPC_INTERNAL_SECRET?.trim();
     if (secret) {
       const fanout = Number.parseInt(this.env.RPC_SCANNER_FANOUT ?? "2", 10);
-      setInternalRpc({ secret, fanout: Number.isFinite(fanout) && fanout > 0 ? fanout : 2 });
+      setInternalRpc({
+        secret,
+        fanout: Number.isFinite(fanout) && fanout > 0 ? fanout : 2,
+        fetcher: this.env.RPC_RACER,
+      });
     }
     const tracked = await listTrackedAddressesForChain(this.db, chainId);
     if (tracked.length === 0) {
@@ -179,7 +184,11 @@ export class ScannerShard {
       await setActiveFromBlockForChain(this.db, chainId, Number(head) + 1);
       await this.saveWindow(window);
       await this.schedule(
-        pollInterval(head, chain?.block_speed_ms ?? null, this.catchUpMs(), MAX_POLL_INTERVAL_MS),
+        settledPollInterval(
+          chain?.block_speed_ms ?? null,
+          this.settledPollIntervalMs(),
+          MAX_POLL_INTERVAL_MS,
+        ),
       );
       return;
     }
@@ -192,7 +201,11 @@ export class ScannerShard {
       // expires instead of leaving D1 pinned at the old re-anchor forever.
       await this.maybeFlushCursor();
       await this.schedule(
-        pollInterval(head, chain?.block_speed_ms ?? null, this.catchUpMs(), MAX_POLL_INTERVAL_MS),
+        settledPollInterval(
+          chain?.block_speed_ms ?? null,
+          this.settledPollIntervalMs(),
+          MAX_POLL_INTERVAL_MS,
+        ),
       );
       return;
     }
@@ -201,25 +214,72 @@ export class ScannerShard {
     let blockNumber = start;
     let lastHash = cursorHash;
 
-    while (blockNumber <= end && processed < this.maxBlocksPerPass()) {
-      // One batched request fetches the block header + its logs (instead of two
-      // calls), cutting rpc-racer requests per block roughly in half.
-      let block: import("../domain/activity").NormalizedBlock;
-      let logs: import("../domain/activity").NormalizedLog[];
+    // Prefetch a bounded window of consecutive blocks+logs in range batches,
+    // then classify/process them sequentially. This collapses the scanner's
+    // per-new-block rpc-racer requests into ~1 batch per
+    // `SCANNER_MAX_BLOCKS_PER_RANGE` blocks while keeping parent-hash continuity
+    // checks per block.
+    const prefetchLimit = this.maxBlocksPerPass();
+    const processEnd =
+      end < start + BigInt(prefetchLimit) ? end : start + BigInt(prefetchLimit) - 1n;
+    const prefetched = new Map<
+      bigint,
+      {
+        block: import("../domain/activity").NormalizedBlock;
+        logs: import("../domain/activity").NormalizedLog[];
+      }
+    >();
+    for (let from = start; from <= processEnd; from = from + BigInt(this.maxBlocksPerRange())) {
+      const to =
+        from + BigInt(this.maxBlocksPerRange()) - 1n > processEnd
+          ? processEnd
+          : from + BigInt(this.maxBlocksPerRange()) - 1n;
+      let items: import("../rpc/client").BlockAndLogs[];
       try {
-        ({ block, logs } = await fetchBlockAndLogs({
+        items = await fetchBlocksAndLogsByRange({
           baseUrl: this.env.RPC_RACER_BASE_URL,
           chainId,
-          blockNumber,
-        }));
+          fromBlock: from,
+          toBlock: to,
+        });
       } catch (error) {
         console.error(
-          `scan block fetch failed [chain ${chainId} block ${blockNumber}]`,
+          `scan range fetch failed [chain ${chainId} block ${from}..${to}]`,
           String(error),
         );
-        if (await this.registerBlockFailure(chainId, blockNumber)) return;
+        if (await this.registerBlockFailure(chainId, from)) return;
         await this.schedule(this.catchUpMs());
         return;
+      }
+      for (let index = 0; index < items.length; index += 1) {
+        prefetched.set(from + BigInt(index), items[index]);
+      }
+    }
+
+    while (blockNumber <= end && processed < this.maxBlocksPerPass()) {
+      const cached = prefetched.get(blockNumber);
+      let block: import("../domain/activity").NormalizedBlock;
+      let logs: import("../domain/activity").NormalizedLog[];
+      if (cached !== undefined) {
+        block = cached.block;
+        logs = cached.logs;
+      } else {
+        // Likely a replay target from a reorg that pruned ahead of the prefetch.
+        try {
+          ({ block, logs } = await fetchBlockAndLogs({
+            baseUrl: this.env.RPC_RACER_BASE_URL,
+            chainId,
+            blockNumber,
+          }));
+        } catch (error) {
+          console.error(
+            `scan block fetch failed [chain ${chainId} block ${blockNumber}]`,
+            String(error),
+          );
+          if (await this.registerBlockFailure(chainId, blockNumber)) return;
+          await this.schedule(this.catchUpMs());
+          return;
+        }
       }
       const verdict = classifyChain(window, { parentHash: block.parentHash, cursorHash: lastHash });
 
@@ -311,7 +371,11 @@ export class ScannerShard {
     const nextInterval =
       processed >= this.maxBlocksPerPass()
         ? this.catchUpMs()
-        : pollInterval(head, chain?.block_speed_ms ?? null, this.catchUpMs(), MAX_POLL_INTERVAL_MS);
+        : settledPollInterval(
+            chain?.block_speed_ms ?? null,
+            this.settledPollIntervalMs(),
+            MAX_POLL_INTERVAL_MS,
+          );
     await this.schedule(nextInterval);
   }
 
@@ -546,6 +610,18 @@ export class ScannerShard {
     return Number.isFinite(parsed) && parsed >= 100 ? parsed : 1000;
   }
 
+  /** Minimum cadence between alarms while caught up (env, default 2000ms). */
+  private settledPollIntervalMs(): number {
+    const parsed = Number.parseInt(this.env.SCANNER_SETTLED_POLL_INTERVAL_MS ?? "", 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 2000;
+  }
+
+  /** Max consecutive blocks fetched per rpc-racer range batch (env, default 10). */
+  private maxBlocksPerRange(): number {
+    const parsed = Number.parseInt(this.env.SCANNER_MAX_BLOCKS_PER_RANGE ?? "", 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 10;
+  }
+
   // -------------------------------------------------------------------------
   // Control-plane command application (delegates to M1 behavior + activation)
   // -------------------------------------------------------------------------
@@ -566,7 +642,11 @@ export class ScannerShard {
     const chain = await getChainRegistry(this.db, chainId);
     const wasActive = chain?.status === "active" || chain?.cursor_block !== null;
 
-    const resolved = await resolveChain({ baseUrl: this.env.RPC_RACER_BASE_URL, chainId });
+    const resolved = await resolveChain({
+      baseUrl: this.env.RPC_RACER_BASE_URL,
+      chainId,
+      fetcher: this.env.RPC_RACER,
+    });
     if (!resolved.ok) {
       if (resolved.reason === "unknown_chain") {
         await updateChainRegistryStatus(this.db, chainId, {
@@ -612,7 +692,11 @@ export class ScannerShard {
   }
 
   private async handleRetryChain(commandId: string, chainId: number): Promise<void> {
-    const resolved = await resolveChain({ baseUrl: this.env.RPC_RACER_BASE_URL, chainId });
+    const resolved = await resolveChain({
+      baseUrl: this.env.RPC_RACER_BASE_URL,
+      chainId,
+      fetcher: this.env.RPC_RACER,
+    });
     if (!resolved.ok) {
       if (resolved.reason === "unknown_chain") {
         await updateChainRegistryStatus(this.db, chainId, {
@@ -637,16 +721,22 @@ export class ScannerShard {
   }
 }
 
-function pollInterval(
-  head: bigint,
+/**
+ * Caught-up (settled) poll interval: approximately one block interval, but never
+ * faster than the configured floor. This replaces the previous half-block
+ * cadence (which hurt fast chains like Arbitrum the most) while staying well
+ * within the pilot's lag objective.
+ */
+function settledPollInterval(
   blockSpeedMs: number | null,
   minIntervalMs: number,
   maxIntervalMs: number,
 ): number {
-  if (blockSpeedMs !== null && Number.isFinite(blockSpeedMs) && blockSpeedMs > 0) {
-    return Math.min(Math.max(Math.round(blockSpeedMs / 2), minIntervalMs), maxIntervalMs);
-  }
-  return minIntervalMs;
+  const base =
+    blockSpeedMs !== null && Number.isFinite(blockSpeedMs) && blockSpeedMs > 0
+      ? Math.round(blockSpeedMs)
+      : minIntervalMs;
+  return Math.min(Math.max(base, minIntervalMs), maxIntervalMs);
 }
 
 async function reactivateUnsupportedSubscriptions(db: D1Database, chainId: number): Promise<void> {

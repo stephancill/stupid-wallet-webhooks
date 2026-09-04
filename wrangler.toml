@@ -18,6 +18,12 @@ binding = "DB"
 database_name = "address-notifications-db"
 database_id = "abb46259-a808-4350-bc3c-cbd8201f85ef"
 
+# rpc-racer worker reachable by service binding (no additional request fees) for
+# the scanner's JSON-RPC and chain-metadata traffic.
+[[services]]
+binding = "RPC_RACER"
+service = "rpc-racer"
+
 [[durable_objects.bindings]]
 name = "SCANNER_SHARD_1"
 class_name = "ScannerShard"
@@ -62,6 +68,10 @@ SCANNER_SHARD_COUNT = "2"
 SCANNER_MAX_BLOCKS_PER_PASS = "100"
 # Fastest catch-up poll cadence in ms while a backlog remains.
 SCANNER_MIN_POLL_INTERVAL_MS = "500"
+# Minimum cadence between alarms while a chain is caught up (no backlog).
+SCANNER_SETTLED_POLL_INTERVAL_MS = "2000"
+# Max consecutive blocks fetched per rpc-racer range batch.
+SCANNER_MAX_BLOCKS_PER_RANGE = "10"
 # Max cadence for persisting the scanner D1 cursor (ms); keeps D1 writes low on
 # fast-cadence chains. Default 8000.
 SCANNER_CURSOR_D1_MS = "8000"

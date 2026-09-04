@@ -9,6 +9,8 @@ export type Env = {
 
   ALLOW_INSECURE_TEST_WEBHOOKS?: string;
   RPC_RACER_BASE_URL: string;
+  /** rpc-racer worker service binding (no extra request fees vs. public HTTP). */
+  RPC_RACER?: Fetcher;
   RPC_INTERNAL_SECRET?: string;
   RPC_SCANNER_FANOUT?: string;
   SCANNER_SHARD_COUNT: string;
@@ -16,6 +18,10 @@ export type Env = {
   SCANNER_MAX_BLOCKS_PER_PASS?: string;
   /** Fastest catch-up poll cadence in ms (default 1000). */
   SCANNER_MIN_POLL_INTERVAL_MS?: string;
+  /** Minimum caught-up (settled) poll cadence in ms (default 2000). */
+  SCANNER_SETTLED_POLL_INTERVAL_MS?: string;
+  /** Max blocks fetched per rpc-racer range batch (default 10). */
+  SCANNER_MAX_BLOCKS_PER_RANGE?: string;
   /** Max D1 `cursor` persistence cadence in ms (default 8000). */
   SCANNER_CURSOR_D1_MS?: string;
   /** Consecutive unresolvable scans before auto re-anchor (default 3). */
@@ -68,7 +74,7 @@ export type RateLimitTask = {
 
 export type ScannerEnv = Pick<
   Env,
-  "DB" | "SCANNER_SHARD_1" | "SCANNER_SHARD_2" | "RPC_RACER_BASE_URL"
+  "DB" | "SCANNER_SHARD_1" | "SCANNER_SHARD_2" | "RPC_RACER_BASE_URL" | "RPC_RACER"
 >;
 
 /** Resolves the scanner shard namespace for a given shard id (0-based). */
