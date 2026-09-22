@@ -5,18 +5,12 @@ import { z } from "zod";
 import type { Env } from "../env";
 import type { AuthContext } from "./middleware";
 import { authContext } from "./middleware";
-import {
-  createWebhook,
-  getWebhook,
-  listWebhooks,
-  deleteWebhook,
-  listSubscriptions,
-} from "../db/repository";
+import { createWebhook, getWebhook, listWebhooks } from "../db/repository";
 import { IDs } from "../domain/ids";
 import { deriveWebhookSecret } from "../domain/keys";
 import { validateWebhookUrl } from "../domain/webhook";
 import { deliverTestWebhook } from "./queues/deliveryService";
-import { submitScrUnsubscribe } from "../scanner/outbox";
+import { submitWebhookDelete } from "../scanner/outbox";
 
 const createSchema = z.object({
   url: z.string().min(1).max(2048),
@@ -96,6 +90,7 @@ webhooks.post("/:webhookId/test", async (c) => {
   if (webhook === null) {
     throw new HTTPException(404, { message: "Webhook not found" });
   }
+  if (webhook.status !== "active") throw new HTTPException(409, { message: "Webhook is inactive" });
 
   const result = await deliverTestWebhook({ env: c.env, db: c.env.DB, webhook });
   return c.json({
@@ -117,32 +112,6 @@ webhooks.delete("/:webhookId", async (c) => {
     throw new HTTPException(404, { message: "Webhook not found" });
   }
 
-  // Cascade: deactivate every active subscription on this webhook.
-  await cascadeDeactivateWebhookSubscriptions(c, webhookId);
-
-  const deleted = await deleteWebhook(c.env.DB, webhookId, ctx.accountId);
-  return c.json({ id: webhookId, deleted });
+  await submitWebhookDelete({ db: c.env.DB, env: c.env, webhookId, accountId: ctx.accountId });
+  return c.json({ id: webhookId, deleted: true });
 });
-
-export async function cascadeDeactivateWebhookSubscriptions(
-  c: { env: Env; get: (key: "auth") => AuthContext },
-  webhookId: string,
-): Promise<void> {
-  const ctx = c.get("auth");
-  const subscriptions = await listSubscriptions(c.env.DB, ctx.accountId, webhookId);
-  for (const subscription of subscriptions) {
-    await submitScrUnsubscribe({
-      db: c.env.DB,
-      env: c.env,
-      state: {
-        subscriptionId: subscription.id,
-        chainId: subscription.chain_id,
-        address: toUint8(subscription.address),
-      },
-    });
-  }
-}
-
-function toUint8(value: Uint8Array | ArrayBuffer): Uint8Array {
-  return value instanceof ArrayBuffer ? new Uint8Array(value) : value;
-}

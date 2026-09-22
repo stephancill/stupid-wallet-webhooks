@@ -53,6 +53,7 @@ subscriptions.post("/", zValidator("json", createSchema), async (c) => {
   if (webhook === null) {
     throw new HTTPException(400, { message: "webhookId must belong to this account" });
   }
+  if (webhook.status !== "active") throw new HTTPException(409, { message: "Webhook is inactive" });
 
   let normalized;
   try {

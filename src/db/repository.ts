@@ -372,18 +372,6 @@ export async function listWebhooks(db: D1Database, accountId: string): Promise<W
   return results.map(toWebhookRow);
 }
 
-export async function deleteWebhook(
-  db: D1Database,
-  webhookId: string,
-  accountId: string,
-): Promise<boolean> {
-  const res = await db
-    .prepare("DELETE FROM webhooks WHERE id = ? AND account_id = ?")
-    .bind(webhookId, accountId)
-    .run();
-  return (res.meta.changes ?? 0) > 0;
-}
-
 // ---------------------------------------------------------------------------
 // Subscriptions
 // ---------------------------------------------------------------------------
@@ -560,7 +548,9 @@ export async function setSubscriptionStatus(
   }
   params.push(subscriptionId);
   await db
-    .prepare(`UPDATE subscriptions SET ${sets.join(", ")} WHERE id = ?`)
+    .prepare(
+      `UPDATE subscriptions SET ${sets.join(", ")} WHERE id = ? AND deleted_at IS NULL AND status != 'deleting'`,
+    )
     .bind(...params)
     .run();
 }
@@ -1211,17 +1201,80 @@ export async function observeSummary(
   };
 }
 
-/** Sets the activation boundary on active subscriptions that don't have one yet. */
-export async function setActiveFromBlockForChain(
-  db: D1Database,
-  chainId: number,
-  fromBlock: number,
-): Promise<void> {
+/** Commit the boundary and command acknowledgement together; redelivery cannot move it. */
+export async function completeSubscriptionActivation({
+  db,
+  chainId,
+  subscriptionId,
+  commandId,
+  fromBlock,
+  anchor,
+}: {
+  db: D1Database;
+  chainId: number;
+  subscriptionId: string | null;
+  commandId: string;
+  fromBlock: number;
+  anchor?: { number: number; hash: string };
+}): Promise<void> {
+  const now = nowISO();
+  const statements: D1PreparedStatement[] = [];
+  if (anchor) {
+    statements.push(
+      db
+        .prepare(
+          "UPDATE chain_registry SET cursor_block = ?, cursor_hash = ?, last_head_block = ?, updated_at = ? WHERE chain_id = ? AND cursor_block IS NULL",
+        )
+        .bind(anchor.number, anchor.hash, anchor.number, now, chainId),
+    );
+  }
+  const scope =
+    subscriptionId === null
+      ? "chain_id = ? AND status = 'unsupported'"
+      : "id = ? AND status = 'pending'";
+  statements.push(
+    db
+      .prepare(
+        `UPDATE subscriptions SET status = 'active', active_from_block = COALESCE(active_from_block, ?), reason = NULL, updated_at = ? WHERE ${scope} AND deleted_at IS NULL AND EXISTS (SELECT 1 FROM webhooks WHERE id = subscriptions.webhook_id AND status = 'active')`,
+      )
+      .bind(fromBlock, now, subscriptionId ?? chainId),
+    db
+      .prepare(
+        "UPDATE scanner_operations SET status = 'applied', error = NULL, applied_at = ?, updated_at = ? WHERE id = ?",
+      )
+      .bind(now, now, commandId),
+  );
+  await db.batch(statements);
+}
+
+export async function getSubscriptionById({
+  db,
+  subscriptionId,
+}: {
+  db: D1Database;
+  subscriptionId: string;
+}): Promise<SubscriptionRow | null> {
+  const row = await db
+    .prepare("SELECT * FROM subscriptions WHERE id = ?")
+    .bind(subscriptionId)
+    .first<Record<string, unknown>>();
+  return row === null ? null : toSubscriptionRow(row);
+}
+
+export async function recordCommandRetry({
+  db,
+  commandId,
+  error,
+}: {
+  db: D1Database;
+  commandId: string;
+  error: string;
+}): Promise<void> {
   await db
     .prepare(
-      "UPDATE subscriptions SET active_from_block = ?, updated_at = ? WHERE chain_id = ? AND status = 'active' AND deleted_at IS NULL AND active_from_block IS NULL",
+      "UPDATE scanner_operations SET attempts = attempts + 1, error = ?, updated_at = ? WHERE id = ? AND status = 'pending'",
     )
-    .bind(fromBlock, nowISO(), chainId)
+    .bind(error, nowISO(), commandId)
     .run();
 }
 
@@ -1434,7 +1487,7 @@ export async function getObservationPayload(
 
 /**
  * Subscriptions on a chain+address that are active and eligible to receive
- * activity (active_from_block null or <= the activity block).
+ * activity with an explicit activation boundary and an active webhook.
  */
 export async function listEligibleSubscriptions(
   db: D1Database,
@@ -1446,7 +1499,7 @@ export async function listEligibleSubscriptions(
 > {
   const { results } = await db
     .prepare(
-      "SELECT id, account_id, webhook_id, active_from_block FROM subscriptions WHERE chain_id = ? AND address = ? AND status = 'active' AND deleted_at IS NULL AND (active_from_block IS NULL OR active_from_block <= ?)",
+      "SELECT id, account_id, webhook_id, active_from_block FROM subscriptions WHERE chain_id = ? AND address = ? AND status = 'active' AND deleted_at IS NULL AND active_from_block IS NOT NULL AND active_from_block <= ? AND EXISTS (SELECT 1 FROM webhooks WHERE id = subscriptions.webhook_id AND status = 'active')",
     )
     .bind(chainId, hexToBytes(trackedAddress), fromBlock)
     .all<{

@@ -1,14 +1,15 @@
 import {
   getCommand,
   markCommandApplied,
-  markCommandFailed,
   setSubscriptionStatus,
   updateChainRegistryStatus,
   getChainRegistry,
   listTrackedAddressesForChain,
   setChainCursor,
   setChainCursorAndHead,
-  setActiveFromBlockForChain,
+  completeSubscriptionActivation,
+  getSubscriptionById,
+  recordCommandRetry,
   upsertObservation,
   markBlockRevertedAndList,
   listEligibleSubscriptions,
@@ -56,6 +57,8 @@ export class ScannerShard {
   private cursorFlushAt: number | null = null;
   /** Consecutive failures on the same block (drives the skip-a-poisoned-block guard). */
   private blockFailures: { block: bigint; count: number } | null = null;
+  /** RPC awaits must not let an alarm scan past a subscription being activated. */
+  private operation: Promise<unknown> = Promise.resolve();
 
   constructor(state: DurableObjectState, env: Env) {
     this.state = state;
@@ -71,6 +74,10 @@ export class ScannerShard {
   }
 
   async fetch(request: Request): Promise<Response> {
+    return this.exclusive({ run: () => this.handleRequest(request) });
+  }
+
+  private async handleRequest(request: Request): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/apply" && request.method === "POST") {
       let body: { commandId?: unknown };
@@ -114,9 +121,32 @@ export class ScannerShard {
   }
 
   async alarm(): Promise<void> {
-    const chainId = this.chainId();
-    if (Number.isNaN(chainId)) return;
-    await this.scanChain(chainId);
+    await this.exclusive({
+      run: async () => {
+        const chainId = this.chainId();
+        if (Number.isNaN(chainId)) return;
+        await this.scanChain(chainId);
+      },
+    });
+  }
+
+  private exclusive<T>({ run }: { run: () => Promise<T> }): Promise<T> {
+    const result = this.operation.then(() => {
+      const secret = this.env.RPC_INTERNAL_SECRET?.trim();
+      const fanout = Number.parseInt(this.env.RPC_SCANNER_FANOUT ?? "2", 10);
+      setInternalRpc(
+        secret
+          ? {
+              secret,
+              fanout: Number.isFinite(fanout) && fanout > 0 ? fanout : 2,
+              fetcher: this.env.RPC_RACER,
+            }
+          : null,
+      );
+      return run();
+    });
+    this.operation = result.catch(() => {});
+    return result;
   }
 
   // -------------------------------------------------------------------------
@@ -184,7 +214,6 @@ export class ScannerShard {
       window = [{ number: Number(head), hash: headBlock.hash, parentHash: headBlock.parentHash }];
       this.pendingTip = { number: Number(head), hash: headBlock.hash };
       await setChainCursor(this.db, chainId, Number(head), headBlock.hash);
-      await setActiveFromBlockForChain(this.db, chainId, Number(head) + 1);
       await this.saveWindow(window);
       await this.schedule(
         settledPollInterval(
@@ -646,8 +675,17 @@ export class ScannerShard {
   private async handleSubscribe(command: CommandRow): Promise<void> {
     const chainId = command.chain_id;
     const subscriptionId = command.subscription_id;
-    const chain = await getChainRegistry(this.db, chainId);
-    const wasActive = chain?.status === "active" || chain?.cursor_block !== null;
+    if (subscriptionId === null) throw new Error("Subscribe command has no subscription");
+    const subscription = await getSubscriptionById({ db: this.db, subscriptionId });
+    if (
+      subscription === null ||
+      subscription.deleted_at !== null ||
+      subscription.status === "deleting" ||
+      (subscription.status === "active" && subscription.active_from_block !== null)
+    ) {
+      await markCommandApplied(this.db, command.id);
+      return;
+    }
 
     const resolved = await resolveChain({
       baseUrl: this.env.RPC_RACER_BASE_URL,
@@ -670,32 +708,62 @@ export class ScannerShard {
         await markCommandApplied(this.db, command.id);
         return;
       }
-      await markCommandFailed(
-        this.db,
-        command.id,
-        "Chain resolution failed transiently",
-        command.attempts,
-      );
+      await recordCommandRetry({
+        db: this.db,
+        commandId: command.id,
+        error: "Chain resolution failed transiently",
+      });
       return;
     }
 
     await updateChainRegistryStatus(this.db, chainId, {
-      status: "active",
+      status: (await getChainRegistry(this.db, chainId))?.status === "paused" ? "paused" : "active",
       shard_id: chainId % shardCountValue(this.env),
       name: resolved.chain.name,
       last_probe_at: new Date().toISOString(),
       block_speed_ms: resolved.chain.blockSpeedMs ?? null,
     });
 
-    if (subscriptionId !== null) {
-      await setSubscriptionStatus(this.db, subscriptionId, "active");
-    }
+    await this.activate({ chainId, subscriptionId, commandId: command.id });
+  }
 
-    // Start scanning immediately if this is the chain's first activation.
-    if (!wasActive) {
-      await this.schedule(0);
+  private async activate({
+    chainId,
+    subscriptionId,
+    commandId,
+  }: {
+    chainId: number;
+    subscriptionId: string | null;
+    commandId: string;
+  }): Promise<void> {
+    let head: bigint;
+    let anchor: { number: number; hash: string } | undefined;
+    try {
+      head = await ethBlockNumber({ baseUrl: this.env.RPC_RACER_BASE_URL, chainId });
+      const chain = await getChainRegistry(this.db, chainId);
+      if (chain?.cursor_block === null) {
+        const block = await ethGetBlockByNumber({
+          baseUrl: this.env.RPC_RACER_BASE_URL,
+          chainId,
+          blockNumber: head,
+          includeTransactions: false,
+        });
+        anchor = { number: Number(head), hash: block.hash };
+      }
+    } catch (error) {
+      if (!isRpcReadError(error)) throw error;
+      await recordCommandRetry({ db: this.db, commandId, error: String(error) });
+      return;
     }
-    await markCommandApplied(this.db, command.id);
+    await completeSubscriptionActivation({
+      db: this.db,
+      chainId,
+      subscriptionId,
+      commandId,
+      fromBlock: Number(head) + 1,
+      anchor,
+    });
+    await this.schedule(0);
   }
 
   private async handleRetryChain(commandId: string, chainId: number): Promise<void> {
@@ -712,7 +780,11 @@ export class ScannerShard {
           last_probe_at: new Date().toISOString(),
         });
       } else {
-        await markCommandFailed(this.db, commandId, "transient", 0);
+        await recordCommandRetry({
+          db: this.db,
+          commandId,
+          error: "Chain resolution failed transiently",
+        });
         return;
       }
     } else {
@@ -722,7 +794,8 @@ export class ScannerShard {
         name: resolved.chain.name,
         last_probe_at: new Date().toISOString(),
       });
-      await reactivateUnsupportedSubscriptions(this.db, chainId);
+      await this.activate({ chainId, subscriptionId: null, commandId });
+      return;
     }
     await markCommandApplied(this.db, commandId);
   }
@@ -744,15 +817,6 @@ function settledPollInterval(
       ? Math.round(blockSpeedMs)
       : minIntervalMs;
   return Math.min(Math.max(base, minIntervalMs), maxIntervalMs);
-}
-
-async function reactivateUnsupportedSubscriptions(db: D1Database, chainId: number): Promise<void> {
-  await db
-    .prepare(
-      "UPDATE subscriptions SET status = 'active', updated_at = ? WHERE chain_id = ? AND status = 'unsupported' AND deleted_at IS NULL",
-    )
-    .bind(new Date().toISOString(), chainId)
-    .run();
 }
 
 function shardCountValue(env: Env): number {

@@ -21,6 +21,8 @@ export async function newCommandId(
   kind: "subscribe" | "unsubscribe",
   subscriptionId: string,
 ): Promise<string> {
+  // SQL cascades use the same deterministic unsubscribe id for every subscription.
+  if (kind === "unsubscribe") return `cmd_unsubscribe_${subscriptionId}`;
   return commandId(`${kind}:${subscriptionId}`);
 }
 
@@ -40,11 +42,13 @@ export async function dispatchCommand(
 ): Promise<void> {
   const namespace = shardNamespaceFor(env, command.chain_id);
   const stub = namespace.get(namespace.idFromName(`chain-${command.chain_id}`));
-  await stub.fetch("https://scanner.internal/apply", {
+  const response = await stub.fetch("https://scanner.internal/apply", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ commandId: command.id }),
   });
+  if (!response.ok)
+    throw new Error(`Scanner command ${command.id} dispatch failed: HTTP ${response.status}`);
 }
 
 function trackedAddressId(chainId: number, address: Uint8Array): string {
@@ -132,7 +136,7 @@ export async function submitScrSubscribe({
 /**
  * Marks a subscription deleting, decrements the tracked-address reference, and
  * commits an idempotent unsubscribe command in one batch, then dispatches it.
- * Returns false when the subscription was already absent or deleting.
+ * Repeated deletion succeeds without decrementing reference counts again.
  */
 export async function submitScrUnsubscribe({
   db,
@@ -146,45 +150,88 @@ export async function submitScrUnsubscribe({
   const id = await newCommandId("unsubscribe", state.subscriptionId);
   const now = new Date().toISOString();
 
-  const updated = await db
-    .prepare(
-      "UPDATE subscriptions SET status = 'deleting', deleted_at = ?, updated_at = ? WHERE id = ? AND account_id = (SELECT account_id FROM subscriptions WHERE id = ?) AND deleted_at IS NULL",
-    )
-    .bind(now, now, state.subscriptionId, state.subscriptionId)
-    .run();
-
-  if ((updated.meta.changes ?? 0) === 0) {
-    return false;
-  }
-
-  await db.batch([
-    db
-      .prepare(
-        "UPDATE tracked_addresses SET ref_count = ref_count - 1, updated_at = ? WHERE chain_id = ? AND address = ? AND ref_count > 0",
-      )
-      .bind(now, state.chainId, state.address),
-    db
-      .prepare(
-        "DELETE FROM tracked_addresses WHERE chain_id = ? AND address = ? AND ref_count <= 0",
-      )
-      .bind(state.chainId, state.address),
-    db
-      .prepare(
-        "INSERT INTO scanner_operations (id, chain_id, kind, address, subscription_id, payload, status, created_at, updated_at) VALUES (?, ?, 'unsubscribe', ?, ?, ?, 'pending', ?, ?)",
-      )
-      .bind(
-        id,
-        state.chainId,
-        state.address,
-        state.subscriptionId,
-        JSON.stringify({ chainId: state.chainId, subscriptionId: state.subscriptionId }),
-        now,
-        now,
-      ),
-  ]);
+  const subscription = await db
+    .prepare("SELECT id FROM subscriptions WHERE id = ?")
+    .bind(state.subscriptionId)
+    .first();
+  if (subscription === null) return false;
+  await db.batch(
+    unsubscribeStatements({ db, scope: "s.id = ?", params: [state.subscriptionId], now }),
+  );
 
   await dispatchCommand(env, { id, chain_id: state.chainId });
   return true;
+}
+
+/** All scoped subscriptions, references and outbox commands change in one transaction. */
+function unsubscribeStatements({
+  db,
+  scope,
+  params,
+  now,
+}: {
+  db: D1Database;
+  scope: string;
+  params: string[];
+  now: string;
+}): D1PreparedStatement[] {
+  const live = `${scope} AND s.deleted_at IS NULL AND s.status != 'deleting'`;
+  const references = `SELECT COUNT(*) FROM subscriptions s WHERE ${live} AND s.chain_id = tracked_addresses.chain_id AND s.address = tracked_addresses.address`;
+  return [
+    db
+      .prepare(
+        `INSERT OR IGNORE INTO scanner_operations (id, chain_id, kind, address, subscription_id, payload, status, created_at, updated_at) SELECT 'cmd_unsubscribe_' || s.id, s.chain_id, 'unsubscribe', s.address, s.id, json_object('chainId', s.chain_id, 'subscriptionId', s.id), 'pending', ?, ? FROM subscriptions s WHERE ${live}`,
+      )
+      .bind(now, now, ...params),
+    db
+      .prepare(
+        `UPDATE tracked_addresses SET ref_count = ref_count - (${references}), updated_at = ? WHERE (${references}) > 0`,
+      )
+      .bind(...params, now, ...params),
+    db
+      .prepare(
+        `DELETE FROM tracked_addresses WHERE ref_count <= 0 AND EXISTS (SELECT 1 FROM subscriptions s WHERE ${live} AND s.chain_id = tracked_addresses.chain_id AND s.address = tracked_addresses.address)`,
+      )
+      .bind(...params),
+    db
+      .prepare(
+        `UPDATE subscriptions AS s SET status = 'deleting', deleted_at = ?, updated_at = ? WHERE ${live}`,
+      )
+      .bind(now, now, ...params),
+  ];
+}
+
+/** Soft-delete the endpoint and its complete cascade, including > one API page. */
+export async function submitWebhookDelete({
+  db,
+  env,
+  webhookId,
+  accountId,
+}: {
+  db: D1Database;
+  env: Env;
+  webhookId: string;
+  accountId: string;
+}): Promise<void> {
+  await db.batch([
+    db
+      .prepare("UPDATE webhooks SET status = 'inactive' WHERE id = ? AND account_id = ?")
+      .bind(webhookId, accountId),
+    ...unsubscribeStatements({
+      db,
+      scope: "s.webhook_id = ? AND s.account_id = ?",
+      params: [webhookId, accountId],
+      now: new Date().toISOString(),
+    }),
+  ]);
+  // Large cascades are durable immediately; reconciliation dispatches the remainder.
+  const { results } = await db
+    .prepare(
+      "SELECT o.id, o.chain_id FROM scanner_operations o JOIN subscriptions s ON s.id = o.subscription_id WHERE s.webhook_id = ? AND s.account_id = ? AND o.kind = 'unsubscribe' AND o.status = 'pending' LIMIT 200",
+    )
+    .bind(webhookId, accountId)
+    .all<{ id: string; chain_id: number }>();
+  for (const command of results) await dispatchCommand(env, command);
 }
 
 /** Redelivers every pending scanner command through the reconciliation job. */

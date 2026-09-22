@@ -31,7 +31,7 @@ export function planFanOutDeliveries({
   const out: Array<{ key: string; body: DeliveryHook }> = [];
 
   for (const subscription of subscriptions) {
-    if (subscription.active_from_block !== null && subscription.active_from_block > block) {
+    if (subscription.active_from_block === null || subscription.active_from_block > block) {
       continue; // not yet eligible for this block
     }
     const built = buildWebhookJson({

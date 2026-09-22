@@ -32,6 +32,35 @@ export async function deliverWebhooks(batch: MessageBatch<DeliveryHook>, env: En
       await recordDeadLetter(env, work, "webhook not found");
       continue;
     }
+    if (webhook.status !== "active") {
+      const existing = await getDeliveryByEvent(
+        env.DB,
+        work.webhookId,
+        work.observationId,
+        work.eventType,
+      );
+      if (existing === null) {
+        await insertDelivery(env.DB, {
+          id: work.deliveryId,
+          account_id: work.accountId,
+          webhook_id: work.webhookId,
+          event_id: work.observationId,
+          event_type: work.eventType,
+          chain_id: work.chainId,
+          status: "failed",
+          attempts: 0,
+          last_error: "webhook inactive",
+        });
+      } else {
+        await updateDelivery(env.DB, existing.id, {
+          status: "failed",
+          attempts: existing.attempts,
+          last_error: "webhook inactive",
+          next_retry_at: null,
+        });
+      }
+      continue;
+    }
 
     await attemptOneDelivery(work, webhook.url, env);
   }

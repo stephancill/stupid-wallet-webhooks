@@ -31,7 +31,7 @@ const sub = (
   id: "sub_a",
   account_id: "acct_a",
   webhook_id: "wh_a",
-  active_from_block: null,
+  active_from_block: 1 as number | null,
   ...over,
 });
 
@@ -45,7 +45,7 @@ describe("fan-out planning", () => {
     expect(plans[0].body.webhookId).toBe("wh_a");
   });
 
-  it("skips subscriptions whose activation block is after the observation", () => {
+  it("skips subscriptions with a missing or future activation block", () => {
     const plans = planFanOutDeliveries({
       observation,
       subscriptions: [
@@ -54,7 +54,7 @@ describe("fan-out planning", () => {
         sub({ active_from_block: null }),
       ],
     });
-    expect(plans).toHaveLength(2); // only the >= 50-block and null-activation subs
+    expect(plans).toHaveLength(1); // only the subscription active since block 50
   });
 
   it("produces byte-stable bodyJson for identical inputs", () => {

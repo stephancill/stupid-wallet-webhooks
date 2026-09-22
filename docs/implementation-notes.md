@@ -7,6 +7,50 @@ Milestone working notes for the Stupid Wallet Webhooks worker.
 
 ## Milestone 5 — Production deployment & pilot (in progress)
 
+### 2026-09-22 — Explicit activation boundaries and atomic webhook deactivation
+
+- Subscription activation now reads a real RPC head even on already-running
+  chains. It persists `active_from_block = head + 1`, changes pending to active,
+  and acknowledges the scanner command in one D1 batch. First-chain activation
+  anchors the cursor in that same transaction, avoiding a later anchor that could
+  skip the subscription's first eligible blocks. Existing boundaries are stable
+  across command redelivery; explicit unsupported-chain retry uses the same path.
+- Scanner requests and alarms execute sequentially across RPC awaits, so scanning
+  cannot overtake an in-flight activation. Transient metadata/head failures leave
+  commands pending for reconciliation. A concurrent deletion cannot reactivate a
+  deleted subscription. Activation also preserves an operator-paused chain.
+- Both SQL fanout eligibility and pure fanout planning reject null activation
+  boundaries. Inactive webhooks are excluded from eligibility.
+- Migration `0003_subscription_boundaries.sql` repairs legacy active/null rows
+  using the persisted scanner checkpoint plus one. Their original activation
+  heights cannot be reconstructed, so eligibility is forward-only from that
+  checkpoint (including for reorg fanout). Rows without a checkpoint are made
+  pending with a deterministic activation command. Triggers enforce non-null
+  active boundaries and prevent subscription creation racing endpoint deletion.
+- **API behavior changes:** webhook DELETE now retains the endpoint as `inactive`
+  and is idempotent; GET/list retain it for history. Test delivery and subscription
+  creation against inactive endpoints return HTTP 409. Subscription DELETE is
+  also idempotent. New queued attempts to inactive endpoints are recorded as
+  terminal `failed` with `webhook inactive` and no HTTP attempt; already-started
+  network requests may finish.
+- Webhook deactivation, all subscription deletions, tracked-address decrements,
+  zero-reference removal, and deterministic unsubscribe commands commit in one
+  D1 transaction. The set-based cascade covers every subscription, rather than
+  stopping after the first API page. Single-subscription deletion uses the same
+  atomic statements. Up to 200 cascade commands dispatch immediately; scheduled
+  reconciliation dispatches any remainder. Delivery history and shared address
+  references are preserved. Dispatch HTTP failures now fail loudly with the
+  command still durable for retry.
+- Regression tests use real SQLite foreign keys, triggers and rollback behind a
+  D1 adapter. They cover backlog activation, first-chain anchoring, overlapping
+  commands/alarms, RPC retry, transactional rollback, deletion racing activation,
+  unsupported retry, 60-subscription cascades, shared references, retained ledger,
+  repeated deletion and queued-delivery suppression. Production preflight found
+  18 active/null subscriptions across four chains, all with scanner checkpoints.
+- Verification: all 111 tests pass, as do formatter, linter, typecheck, local
+  Wrangler migrations and Worker dry-run. Live rollout validation is recorded
+  below after deployment.
+
 ### 2026-09-22 — Bloom-gated, exact-hash log reads
 
 The scanner's range batches previously contained one full-block read and one
