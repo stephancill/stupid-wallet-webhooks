@@ -71,6 +71,46 @@ still incurred one billable log method per block whenever a batch reached Alchem
   recorded Arbitrum block fetched five Transfer logs with two matches for its
   selected participant, all tied to the requested block hash.
 
+#### Production rollout and validation
+
+- Commit `50241ca` deployed through Workers Builds on 2026-09-22 at 09:10 UTC;
+  Worker version `89380f15-e4ff-4740-a1db-0de71b03aace` received 100% of traffic.
+- All six active chains continued advancing. At 09:18 UTC, Arbitrum was eight
+  blocks (two seconds) behind; Ethereum was one block behind and the other four
+  chains were caught up. No scanner commands were pending.
+- A three-minute live tail captured 361 invocations: 358 `ok`, three `canceled`,
+  and no unhandled exceptions. Strict validation rejected 22 transient null-block
+  responses (19 Arbitrum, three Base); subsequent scans progressed past those
+  heights. No new gap reason appeared; Base's pre-existing gap marker remained.
+- An independent replay of Arbitrum blocks 507735625–507735724 with the five
+  production tracked addresses required one log query instead of 100 (99 avoided).
+  All 871 Transfer logs in that range were checked independently; none matched
+  those addresses, so the one positive bloom was a harmless false positive. This
+  is a short-window sample, not a forecast of monthly savings.
+- Gateway analytics for internal Arbitrum traffic after 09:11 UTC, queried at
+  09:17 UTC, showed successful batch/head requests and no recorded error or
+  successful Alchemy-fallback outcomes. Analytics are sampled/delayed and label
+  whole batches rather than their constituent methods. Alchemy's spending cap
+  was already reached before deployment, so this window cannot establish dollar
+  savings or restored Alchemy availability.
+- A temporary Arbitrum subscription received a real `activity.observed` webhook
+  for block 507737154. Its HMAC and timestamp were verified, and both ERC-20
+  effects matched an independently fetched receipt (transaction, block hash,
+  contract, log index, participants and amount). The delivery ledger recorded
+  HTTP 200 on the first attempt for both the connectivity test and real activity.
+- The broader smoke test exposed two **pre-existing control-plane bugs**,
+  confirmed against the pre-rollout source: subscriptions added to an already
+  active chain can remain `active` with a null `active_from_block` (only initial
+  chain activation fills it); deleting a webhook with retained subscription or
+  delivery rows attempts a hard delete and violates foreign-key constraints.
+  The activation-boundary assertion therefore failed even though actual token
+  detection, signing and delivery passed. Both bugs remain follow-up work.
+- Test cleanup removed the subscription from scanning, revoked its API key,
+  suspended its account and stopped the tunnel. Since the delete endpoint failed,
+  the test webhook was explicitly marked inactive in D1. Arbitrum returned to its
+  original five tracked addresses; test delivery history was retained. Existing
+  dead-letter and delivery-latency alerts predate this rollout.
+
 This is the first scanner cost-reduction step. Adaptive provider routing remains
 in rpc-racer; chunk-level scanner checkpoints and coalesced cost counters remain
 follow-up work. The existing range size now bounds each block/log stage to at
