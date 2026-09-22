@@ -45,6 +45,7 @@ export type NormalizedBlock = {
   hash: `0x${string}`;
   parentHash: `0x${string}`;
   timestamp: number;
+  logsBloom: `0x${string}`;
   transactions: NormalizedTx[];
 };
 

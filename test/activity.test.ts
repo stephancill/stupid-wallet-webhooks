@@ -59,6 +59,7 @@ function block(
     hash: "0xaaa",
     parentHash: "0x999",
     timestamp: 1700000000,
+    logsBloom: `0x${"00".repeat(256)}`,
     transactions: txs.map((t) => ({
       hash: t.hash as `0x${string}`,
       index: t.index,

@@ -69,10 +69,11 @@ function mockRpcFetch(): () => void {
         jsonrpc: "2.0",
         id: 1,
         result: {
-          number: "0x10",
+          number: req.params[0],
           hash: "0x" + "ab".repeat(32),
           parentHash: "0x" + "00".repeat(32),
           timestamp: "0x0",
+          logsBloom: "0x" + "00".repeat(256),
           transactions: [],
         },
       }),

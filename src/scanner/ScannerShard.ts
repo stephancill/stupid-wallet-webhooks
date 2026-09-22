@@ -23,6 +23,8 @@ import {
   fetchBlocksAndLogsByRange,
 } from "../rpc/client";
 import { analyzeBlock, finalizeBundles, observationData } from "../domain/activity";
+import { createTransferBloomFilter } from "../domain/bloom";
+import { isRpcReadError } from "../rpc/schema";
 import { classifyChain, pushWindow, pruneTo, type HeldBlock } from "../domain/reorg";
 import { planRevertedDeliveries } from "../queues/plan";
 import { enqueueMatched } from "./queue";
@@ -139,6 +141,7 @@ export class ScannerShard {
       return;
     }
     const trackedSet = new Set(tracked) as Set<`0x${string}`>;
+    const transferBloom = createTransferBloomFilter({ trackedAddresses: trackedSet });
 
     let head: bigint;
     try {
@@ -214,11 +217,9 @@ export class ScannerShard {
     let blockNumber = start;
     let lastHash = cursorHash;
 
-    // Prefetch a bounded window of consecutive blocks+logs in range batches,
-    // then classify/process them sequentially. This collapses the scanner's
-    // per-new-block rpc-racer requests into ~1 batch per
-    // `SCANNER_MAX_BLOCKS_PER_RANGE` blocks while keeping parent-hash continuity
-    // checks per block.
+    // Prefetch full blocks in bounded batches, then exact-hash logs only for
+    // bloom-positive blocks. Matching still inspects every block's transactions
+    // for native activity and tracked senders, even when the log read is skipped.
     const prefetchLimit = this.maxBlocksPerPass();
     const processEnd =
       end < start + BigInt(prefetchLimit) ? end : start + BigInt(prefetchLimit) - 1n;
@@ -241,13 +242,16 @@ export class ScannerShard {
           chainId,
           fromBlock: from,
           toBlock: to,
+          transferBloom,
         });
       } catch (error) {
         console.error(
           `scan range fetch failed [chain ${chainId} block ${from}..${to}]`,
           String(error),
         );
-        if (await this.registerBlockFailure(chainId, from)) return;
+        // Missing/invalid RPC data must never trigger the poisoned-block skip:
+        // an outage or rate limit says nothing about the activity in the block.
+        if (!isRpcReadError(error) && (await this.registerBlockFailure(chainId, from))) return;
         await this.schedule(this.catchUpMs());
         return;
       }
@@ -270,13 +274,15 @@ export class ScannerShard {
             baseUrl: this.env.RPC_RACER_BASE_URL,
             chainId,
             blockNumber,
+            transferBloom,
           }));
         } catch (error) {
           console.error(
             `scan block fetch failed [chain ${chainId} block ${blockNumber}]`,
             String(error),
           );
-          if (await this.registerBlockFailure(chainId, blockNumber)) return;
+          if (!isRpcReadError(error) && (await this.registerBlockFailure(chainId, blockNumber)))
+            return;
           await this.schedule(this.catchUpMs());
           return;
         }
@@ -288,7 +294,8 @@ export class ScannerShard {
           await this.processBlock({ chainId, block, logs, trackedSet });
         } catch (error) {
           console.error(`scan error on chain ${chainId} block ${blockNumber}`, error);
-          if (await this.registerBlockFailure(chainId, blockNumber)) return;
+          if (!isRpcReadError(error) && (await this.registerBlockFailure(chainId, blockNumber)))
+            return;
           await this.schedule(this.catchUpMs());
           return;
         }
@@ -501,15 +508,15 @@ export class ScannerShard {
     logs: import("../domain/activity").NormalizedLog[];
     trackedSet: Set<`0x${string}`>;
   }): Promise<void> {
-    // `logs` are fetched in the same batched request as the block header, so
-    // this phase needs no extra RPC call just to get them (receipts below only
-    // run for the handful of tracked matches).
+    // Logs are either fetched by exact hash or proven irrelevant by the block
+    // bloom. Receipts below only run for tracked transaction/address matches.
     const analyzed = analyzeBlock({ block, logs, tracked: trackedSet });
 
     const receipts = await ethGetTransactionReceipts({
       baseUrl: this.env.RPC_RACER_BASE_URL,
       chainId,
       txHashes: [...new Set(analyzed.receiptHashes)] as `0x${string}`[],
+      blockHash: block.hash,
     });
 
     const observations = await finalizeBundles({

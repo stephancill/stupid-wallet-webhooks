@@ -1,13 +1,24 @@
 /**
- * EVM RPC client over the rpc-racer proxy. For Milestone 2 this reaches the
- * public endpoint over HTTP (the plan's Milestone 0 private service binding and
- * lower fanout land later). Reads use the block hash created by
- * `eth_getBlockByNumber` to query logs, so a lagging upstream can't return an
- * incomplete empty log set for a freshly mined height.
+ * EVM RPC client over the rpc-racer service binding. Fetch blocks first, then
+ * use their blooms to avoid irrelevant log reads. Required logs are queried by
+ * exact block hash and every response is validated before scanner progress.
  */
 
 import { TRANSFER_TOPIC } from "../domain/activity";
 import type { NormalizedLog, NormalizedTx, NormalizedBlock, Receipt } from "../domain/activity";
+import { mayContainTrackedTransfer, type TransferBloomFilter } from "../domain/bloom";
+import {
+  isRpcReadError,
+  parseRpcData,
+  quantitySchema,
+  rpcBatchResponseSchema,
+  rpcBlockSchema,
+  rpcLogsSchema,
+  rpcLogSchema,
+  rpcReceiptSchema,
+  rpcResponseSchema,
+  rpcReadError,
+} from "./schema";
 
 export type RpcResult =
   | {
@@ -112,15 +123,20 @@ export async function jsonRpc<T>({
         body: JSON.stringify({ jsonrpc: "2.0", method, params, id }),
         signal: controller.signal,
       });
-      if (!response.ok && response.status !== 502) {
+      if (!response.ok) {
         throw new Error(`RPC HTTP ${response.status}`);
       }
-      const body = (await response.json()) as {
-        result?: unknown;
-        error?: { message?: string };
-      };
+      const body = parseRpcData({
+        schema: rpcResponseSchema,
+        value: await response.json(),
+        context: method,
+      });
+      if (body.id !== id)
+        throw rpcReadError({ message: `Unexpected RPC response id for ${method}` });
       if (body.error) {
-        throw new Error(body.error.message ?? "RPC error");
+        throw rpcReadError({
+          message: `RPC ${method} (${body.error.code}): ${body.error.message}`,
+        });
       }
       return body.result as T;
     } catch (error) {
@@ -136,7 +152,9 @@ export async function jsonRpc<T>({
       parent?.removeEventListener("abort", onAbort);
     }
   }
-  throw lastError;
+  throw isRpcReadError(lastError)
+    ? lastError
+    : rpcReadError({ message: `RPC ${method} failed: ${String(lastError)}`, cause: lastError });
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -159,7 +177,7 @@ export async function ethBlockNumber({
     params: [],
     signal,
   });
-  return hx(hex);
+  return hx(parseRpcData({ schema: quantitySchema, value: hex, context: "head" }));
 }
 
 export async function ethGetBlockByNumber({
@@ -175,15 +193,14 @@ export async function ethGetBlockByNumber({
   includeTransactions?: boolean;
   signal?: AbortSignal;
 }): Promise<NormalizedBlock> {
-  const raw = await jsonRpc<RpcBlock>({
+  const raw = await jsonRpc<unknown>({
     baseUrl,
     chainId,
     method: "eth_getBlockByNumber",
     params: [`0x${blockNumber.toString(16)}`, includeTransactions],
     signal,
   });
-  if (raw === null) throw new Error(`block ${blockNumber} not found`);
-  return normalizeBlock(raw);
+  return normalizeBlock({ raw, blockNumber, includeTransactions });
 }
 
 export type JsonRpcBatchItem = {
@@ -192,16 +209,14 @@ export type JsonRpcBatchItem = {
   params: unknown[];
 };
 
-type JsonRpcBatchResponseItem = { id: unknown; result?: unknown; error?: { message?: string } };
+type JsonRpcBatchResponseItem = { id: number; result: unknown };
 
 /**
  * Send several JSON-RPC calls in a single HTTP POST (batch). rpc-racer forwards
- * the whole array as one Worker request and returns the array, collapsing N HTTP
- * round-trips into 1 (and thus N billable requests into 1).
+ * the whole array as one Worker request. Providers still bill each RPC item.
+ * Require exactly one successful response per request and return request order.
  */
-export async function jsonRpcBatch<
-  T extends Array<{ id: unknown; result?: unknown; error?: { message?: string } }>,
->({
+export async function jsonRpcBatch({
   baseUrl,
   chainId,
   requests,
@@ -211,7 +226,10 @@ export async function jsonRpcBatch<
   chainId: number | string;
   requests: JsonRpcBatchItem[];
   signal?: AbortSignal;
-}): Promise<T> {
+}): Promise<JsonRpcBatchResponseItem[]> {
+  if (requests.length === 0) return [];
+  const expectedIds = new Set(requests.map((request) => request.id));
+  if (expectedIds.size !== requests.length) throw new Error("Duplicate RPC request ids");
   let lastError: unknown;
   for (let attempt = 0; attempt < RETRIES; attempt += 1) {
     const controller = new AbortController();
@@ -237,14 +255,29 @@ export async function jsonRpcBatch<
         body,
         signal: controller.signal,
       });
-      if (!response.ok && response.status !== 502) {
+      if (!response.ok) {
         throw new Error(`RPC HTTP ${response.status}`);
       }
-      const parsed = (await response.json()) as T;
-      if (!Array.isArray(parsed)) {
-        throw new Error("Expected a JSON-RPC batch response");
+      const parsed = parseRpcData({
+        schema: rpcBatchResponseSchema,
+        value: await response.json(),
+        context: "batch response",
+      });
+      const byId = new Map<number, JsonRpcBatchResponseItem>();
+      for (const item of parsed) {
+        if (typeof item.id !== "number" || !expectedIds.has(item.id) || byId.has(item.id)) {
+          throw rpcReadError({ message: "Unexpected or duplicate RPC response id" });
+        }
+        if (item.error) {
+          throw rpcReadError({
+            message: `RPC item ${item.id} (${item.error.code}): ${item.error.message}`,
+          });
+        }
+        byId.set(item.id, { id: item.id, result: item.result });
       }
-      return parsed;
+      if (byId.size !== requests.length)
+        throw rpcReadError({ message: "Missing RPC batch responses" });
+      return requests.map((request) => byId.get(request.id)!);
     } catch (error) {
       lastError = error;
       if (parent?.aborted) throw error;
@@ -258,54 +291,36 @@ export async function jsonRpcBatch<
       parent?.removeEventListener("abort", onAbort);
     }
   }
-  throw lastError;
+  throw isRpcReadError(lastError)
+    ? lastError
+    : rpcReadError({ message: `RPC batch failed: ${String(lastError)}`, cause: lastError });
 }
 
 /**
- * Fetch a block and its logs in one batch HTTP request (instead of two). The
- * block header + canonical hash comes back with logs for the same block number;
- * logs are filtered to the block hash so a lagging upstream can't inject an
- * unrelated/empty log set for the polled height.
+ * Single-block replay uses the same bloom and exact-hash path as range reads.
  */
 export async function fetchBlockAndLogs({
   baseUrl,
   chainId,
   blockNumber,
+  transferBloom,
   signal,
 }: {
   baseUrl: string;
   chainId: number;
   blockNumber: bigint;
+  transferBloom: TransferBloomFilter;
   signal?: AbortSignal;
 }): Promise<{ block: NormalizedBlock; logs: NormalizedLog[] }> {
-  const hex = `0x${blockNumber.toString(16)}`;
-  const responses = await jsonRpcBatch<JsonRpcBatchResponseItem[]>({
+  const [result] = await fetchBlocksAndLogsByRange({
     baseUrl,
     chainId,
-    requests: [
-      { id: 1, method: "eth_getBlockByNumber", params: [hex, true] },
-      // Keep the same topic filter as the non-batched path so we only pull
-      // transfer logs (not every log in the block).
-      {
-        id: 2,
-        method: "eth_getLogs",
-        params: [{ fromBlock: hex, toBlock: hex, topics: [TRANSFER_TOPIC] }],
-      },
-    ],
+    fromBlock: blockNumber,
+    toBlock: blockNumber,
+    transferBloom,
     signal,
   });
-  const byId = new Map<number, JsonRpcBatchResponseItem>(responses.map((r) => [Number(r.id), r]));
-  const blockItem = byId.get(1);
-  const logsItem = byId.get(2);
-  if (blockItem?.result === undefined) {
-    throw new Error(`block ${blockNumber} not found`);
-  }
-  const block = normalizeBlock(blockItem.result as RpcBlock);
-  const logsRaw = Array.isArray(logsItem?.result) ? (logsItem.result as RpcLog[]) : [];
-  const logs = logsRaw
-    .filter((log) => log.blockHash.toLowerCase() === block.hash.toLowerCase())
-    .map(normalizeLog);
-  return { block, logs };
+  return result;
 }
 
 export type BlockAndLogs = {
@@ -314,22 +329,22 @@ export type BlockAndLogs = {
 };
 
 /**
- * Fetches a bounded range of consecutive blocks and their Transfer logs in ONE
- * JSON-RPC batch (2 items per block), so the scanner's block reads collapse
- * rpc-racer Worker requests from ~1 per new block to ~1 per range. Blocks are
- * returned in ascending order; logs are filtered to each block's exact hash.
+ * Fetch a bounded batch of full blocks, then only the exact-hash Transfer logs
+ * whose blooms might contain a tracked participant. Negative blooms need no RPC.
  */
 export async function fetchBlocksAndLogsByRange({
   baseUrl,
   chainId,
   fromBlock,
   toBlock,
+  transferBloom,
   signal,
 }: {
   baseUrl: string;
   chainId: number;
   fromBlock: bigint;
   toBlock: bigint;
+  transferBloom: TransferBloomFilter;
   signal?: AbortSignal;
 }): Promise<BlockAndLogs[]> {
   const count = Number(toBlock - fromBlock) + 1;
@@ -338,37 +353,37 @@ export async function fetchBlocksAndLogsByRange({
   const requests: JsonRpcBatchItem[] = [];
   for (let index = 0; index < count; index += 1) {
     const hex = `0x${(fromBlock + BigInt(index)).toString(16)}`;
-    requests.push({ id: index * 2 + 1, method: "eth_getBlockByNumber", params: [hex, true] });
-    requests.push({
-      id: index * 2 + 2,
-      method: "eth_getLogs",
-      params: [{ fromBlock: hex, toBlock: hex, topics: [TRANSFER_TOPIC] }],
-    });
+    requests.push({ id: index + 1, method: "eth_getBlockByNumber", params: [hex, true] });
   }
 
-  const responses = await jsonRpcBatch<JsonRpcBatchResponseItem[]>({
+  const responses = await jsonRpcBatch({
     baseUrl,
     chainId,
     requests,
     signal,
   });
-  const byId = new Map<number, JsonRpcBatchResponseItem>(responses.map((r) => [Number(r.id), r]));
-
-  const out: BlockAndLogs[] = [];
-  for (let index = 0; index < count; index += 1) {
-    const blockNumber = fromBlock + BigInt(index);
-    const blockRaw = byId.get(index * 2 + 1)?.result;
-    if (blockRaw === undefined || blockRaw === null) {
-      throw new Error(`block ${blockNumber} not found`);
-    }
-    const block = normalizeBlock(blockRaw as RpcBlock);
-    const logsRaw = Array.isArray(byId.get(index * 2 + 2)?.result)
-      ? (byId.get(index * 2 + 2)?.result as RpcLog[])
-      : [];
-    const logs = logsRaw
-      .filter((log) => log.blockHash.toLowerCase() === block.hash.toLowerCase())
-      .map(normalizeLog);
-    out.push({ block, logs });
+  const out: BlockAndLogs[] = responses.map((response, index) => ({
+    block: normalizeBlock({ raw: response.result, blockNumber: fromBlock + BigInt(index) }),
+    logs: [],
+  }));
+  const candidates = out.filter(({ block }) =>
+    mayContainTrackedTransfer({ logsBloom: block.logsBloom, filter: transferBloom }),
+  );
+  const logResponses = await jsonRpcBatch({
+    baseUrl,
+    chainId,
+    requests: candidates.map(({ block }, index) => ({
+      id: index + 1,
+      method: "eth_getLogs",
+      params: [{ blockHash: block.hash, topics: [TRANSFER_TOPIC] }],
+    })),
+    signal,
+  });
+  for (let index = 0; index < candidates.length; index += 1) {
+    candidates[index].logs = normalizeLogs({
+      raw: logResponses[index].result,
+      blockHash: candidates[index].block.hash,
+    });
   }
   return out;
 }
@@ -385,17 +400,14 @@ export async function ethGetLogs({
   blockHash: `0x${string}`;
   signal?: AbortSignal;
 }): Promise<NormalizedLog[]> {
-  const raw = await jsonRpc<RpcLog[]>({
+  const raw = await jsonRpc<unknown>({
     baseUrl,
     chainId,
     method: "eth_getLogs",
     params: [{ blockHash, topics: [TRANSFER_TOPIC] }],
     signal,
   });
-  if (!Array.isArray(raw)) return [];
-  return raw
-    .filter((log) => log.blockHash.toLowerCase() === blockHash.toLowerCase())
-    .map(normalizeLog);
+  return normalizeLogs({ raw, blockHash });
 }
 
 /** Batch versions: fetch many receipts in one HTTP request. */
@@ -403,18 +415,20 @@ export async function ethGetTransactionReceipts({
   baseUrl,
   chainId,
   txHashes,
+  blockHash,
   signal,
 }: {
   baseUrl: string;
   chainId: number;
   txHashes: `0x${string}`[];
+  blockHash: `0x${string}`;
   signal?: AbortSignal;
 }): Promise<Map<`0x${string}`, Receipt>> {
   if (txHashes.length === 0) {
     // No receipts needed — do not send an (invalid) empty batch.
     return new Map();
   }
-  const responses = await jsonRpcBatch<JsonRpcBatchResponseItem[]>({
+  const responses = await jsonRpcBatch({
     baseUrl,
     chainId,
     requests: txHashes.map((txHash, i) => ({
@@ -424,13 +438,16 @@ export async function ethGetTransactionReceipts({
     })),
     signal,
   });
-  const byId = new Map<number, JsonRpcBatchResponseItem>(responses.map((r) => [Number(r.id), r]));
   const out = new Map<`0x${string}`, Receipt>();
   txHashes.forEach((txHash, i) => {
-    const res = byId.get(i + 1)?.result;
-    if (res !== undefined && res !== null) {
-      out.set(txHash.toLowerCase() as `0x${string}`, normalizeReceipt(res as RpcReceipt));
+    const receipt = normalizeReceipt(responses[i].result);
+    if (
+      receipt.transactionHash !== txHash.toLowerCase() ||
+      receipt.blockHash !== blockHash.toLowerCase()
+    ) {
+      throw rpcReadError({ message: `Mismatched receipt for ${txHash}` });
     }
+    out.set(txHash.toLowerCase() as `0x${string}`, receipt);
   });
   return out;
 }
@@ -446,7 +463,7 @@ export async function ethGetTransactionReceipt({
   txHash: `0x${string}`;
   signal?: AbortSignal;
 }): Promise<Receipt | null> {
-  const raw = await jsonRpc<RpcReceipt | null>({
+  const raw = await jsonRpc<unknown>({
     baseUrl,
     chainId,
     method: "eth_getTransactionReceipt",
@@ -454,47 +471,35 @@ export async function ethGetTransactionReceipt({
     signal,
   });
   if (raw === null) return null;
-  return normalizeReceipt(raw);
+  const receipt = normalizeReceipt(raw);
+  if (receipt.transactionHash !== txHash.toLowerCase()) {
+    throw rpcReadError({ message: `Mismatched receipt for ${txHash}` });
+  }
+  return receipt;
 }
-
-type RpcLog = {
-  address: string;
-  topics: string[];
-  data: string;
-  logIndex: string;
-  transactionHash: string;
-  blockHash: string;
-};
-
-type RpcReceipt = {
-  transactionHash: string;
-  blockHash: string;
-  status: string;
-  contractAddress: string | null;
-};
-
-type RpcTx = {
-  hash: string;
-  transactionIndex?: string;
-  from: string;
-  to: string | null;
-  nonce: string;
-  value: string;
-};
-
-type RpcBlock = {
-  number: string;
-  hash: string;
-  parentHash: string;
-  timestamp: string;
-  transactions: Array<RpcTx | string>;
-} | null;
 
 function hx(hex: string): bigint {
   return BigInt(hex);
 }
 
-function normalizeLog(log: RpcLog): NormalizedLog {
+function normalizeLogs({
+  raw,
+  blockHash,
+}: {
+  raw: unknown;
+  blockHash: `0x${string}`;
+}): NormalizedLog[] {
+  const logs = parseRpcData({ schema: rpcLogsSchema, value: raw, context: "logs" });
+  return logs.map((log) => {
+    if (log.blockHash.toLowerCase() !== blockHash.toLowerCase()) {
+      throw rpcReadError({ message: `Log block hash mismatch for ${blockHash}` });
+    }
+    return normalizeLog(log);
+  });
+}
+
+function normalizeLog(raw: unknown): NormalizedLog {
+  const log = parseRpcData({ schema: rpcLogSchema, value: raw, context: "log" });
   return {
     address: to20(log.address),
     topics: log.topics.map((t) => t.toLowerCase() as `0x${string}`),
@@ -505,7 +510,8 @@ function normalizeLog(log: RpcLog): NormalizedLog {
   };
 }
 
-function normalizeReceipt(receipt: RpcReceipt): Receipt {
+function normalizeReceipt(raw: unknown): Receipt {
+  const receipt = parseRpcData({ schema: rpcReceiptSchema, value: raw, context: "receipt" });
   return {
     transactionHash: receipt.transactionHash.toLowerCase() as `0x${string}`,
     blockHash: receipt.blockHash.toLowerCase() as `0x${string}`,
@@ -519,24 +525,45 @@ function to20(hex: string): `0x${string}` {
   return `0x${slice.toLowerCase()}` as `0x${string}`;
 }
 
-function normalizeBlock(block: RpcBlock): NormalizedBlock {
-  if (block === null) throw new Error("null block");
-  const entries = Array.isArray(block.transactions) ? block.transactions : [];
-  const transactions: NormalizedTx[] = entries
-    .filter((tx): tx is RpcTx => typeof tx === "object" && tx !== null)
-    .map((tx) => ({
+function normalizeBlock({
+  raw,
+  blockNumber,
+  includeTransactions = true,
+}: {
+  raw: unknown;
+  blockNumber: bigint;
+  includeTransactions?: boolean;
+}): NormalizedBlock {
+  const block = parseRpcData({
+    schema: rpcBlockSchema,
+    value: raw,
+    context: `block ${blockNumber}`,
+  });
+  if (hx(block.number) !== blockNumber) {
+    throw rpcReadError({ message: `Block number mismatch for ${blockNumber}` });
+  }
+  const transactions: NormalizedTx[] = [];
+  for (const tx of block.transactions) {
+    if (typeof tx === "string") {
+      if (includeTransactions)
+        throw rpcReadError({ message: `Missing full transactions for block ${blockNumber}` });
+      continue;
+    }
+    transactions.push({
       hash: tx.hash.toLowerCase() as `0x${string}`,
-      index: tx.transactionIndex === undefined ? 0 : Number(hx(tx.transactionIndex)),
+      index: Number(hx(tx.transactionIndex)),
       from: to20(tx.from),
       to: tx.to === null ? null : to20(tx.to),
       nonce: hx(tx.nonce).toString(),
       value: hx(tx.value),
-    }));
+    });
+  }
   return {
     number: hx(block.number),
     hash: block.hash.toLowerCase() as `0x${string}`,
     parentHash: block.parentHash.toLowerCase() as `0x${string}`,
     timestamp: Number(hx(block.timestamp)),
+    logsBloom: block.logsBloom.toLowerCase() as `0x${string}`,
     transactions,
   };
 }

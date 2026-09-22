@@ -7,6 +7,75 @@ Milestone working notes for the Stupid Wallet Webhooks worker.
 
 ## Milestone 5 — Production deployment & pilot (in progress)
 
+### 2026-09-22 — Bloom-gated, exact-hash log reads
+
+The scanner's range batches previously contained one full-block read and one
+height-based `eth_getLogs` per block. HTTP batching reduced Worker overhead but
+still incurred one billable log method per block whenever a batch reached Alchemy.
+
+- `src/domain/bloom.ts` implements the EVM 2048-bit log bloom membership check
+  using viem's Keccak hashing. Precompute the Transfer signature mask and the
+  tracked participants' **32-byte padded topic** masks (not 20-byte emitter
+  addresses). A scan snapshots the tracked set once and reuses its masks across
+  all range/replay reads.
+- `NormalizedBlock` now retains a validated 256-byte `logsBloom`.
+  `fetchBlocksAndLogsByRange` fetches full blocks first, then batches exact-hash
+  Transfer-log queries only for blocks whose blooms may contain both the
+  signature and a tracked participant. All-negative ranges issue no log RPC.
+  False positives still fetch and match logs normally. The single-block replay
+  helper uses the same implementation.
+- All transactions are still inspected for tracked senders and incoming native
+  value, including blocks whose blooms rule out relevant token activity. ERC-20
+  and ERC-721 matching, receipt verification, activation boundaries and webhook
+  payloads retain their existing semantics.
+- Log queries now use `blockHash`, restoring the consistency requirement in the
+  implementation plan. Returned logs with a different hash, or `removed: true`,
+  fail the read rather than being silently filtered out.
+- `src/rpc/schema.ts` adds Zod validation for JSON-RPC envelopes, blocks, full
+  transactions, blooms, logs and receipts. Batches require exactly one response
+  per numeric request ID, allow arbitrary response order, and reject missing,
+  duplicate, unknown, malformed or errored entries. HTTP failures cannot supply
+  successful results. Missing/invalid log results never become empty arrays.
+- Receipt batches verify both the requested transaction hash and scanned block
+  hash. Block reads verify the requested height and require full transactions
+  when requested; header-only reads still accept transaction hashes.
+- Bounded RPC retries apply independently to the block and log stages, retaining
+  fetched blocks while a log batch retries. Error messages are diagnostic only;
+  no provider capability or routing decision is inferred from error text.
+- **Stricter failure behavior:** required RPC failures are tagged `RpcReadError`
+  and do not enter the poisoned-block skip/re-anchor path. Persistent missing
+  blooms, unavailable logs or mismatched receipts therefore hold the cursor and
+  schedule another scan instead of eventually skipping potentially real activity.
+
+#### Verification
+
+- Bloom tests use a recorded Arbitrum block header and sample Transfer logs as
+  independent reference data, checking both participants, address padding, bit
+  order, absent topics, casing, empty/saturated blooms and invalid inputs.
+- RPC tests cover selective exact-hash reads, reversed batch responses, retained
+  block reads during log retries, native/sender matching on bloom-negative
+  blocks, and strict block/log/receipt/envelope failures.
+- Scanner tests exercise repeated failures beyond the configured skip threshold:
+  the persisted cursor and delivery queue remain untouched until valid data
+  becomes available, then scanning resumes and emits once.
+- `bun run format`, `bun run lint`, `bunx tsc --noEmit`, `git diff --check`, and
+  `bunx wrangler deploy --dry-run` pass. The complete unit suite passes all 100
+  tests. Its first run exposed an existing clock-sensitive assertion in
+  `test/plan.test.ts`: reverted-event bodies use the current time, and two calls
+  crossed a millisecond boundary. The unchanged test passed on rerun; stable
+  reverted-event timestamps remain a separate follow-up.
+- Read-only live checks fetched ten recent blocks on each of the six active
+  chains with the new client. An Arbitrum sample with one test tracked address
+  needed one log query instead of ten; this is a small synthetic tracked-set
+  sample, not a production savings estimate. A separate positive check on the
+  recorded Arbitrum block fetched five Transfer logs with two matches for its
+  selected participant, all tied to the requested block hash.
+
+This is the first scanner cost-reduction step. Adaptive provider routing remains
+in rpc-racer; chunk-level scanner checkpoints and coalesced cost counters remain
+follow-up work. The existing range size now bounds each block/log stage to at
+most ten RPC items by default, rather than twenty mixed items per range.
+
 ### Cost: rpc-racer service binding + settled-range polling (new)
 
 Approved 2026-09-04; targets the two dominant Cloudflare costs from the 48-hour
