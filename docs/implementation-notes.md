@@ -48,8 +48,25 @@ Milestone working notes for the Stupid Wallet Webhooks worker.
   repeated deletion and queued-delivery suppression. Production preflight found
   18 active/null subscriptions across four chains, all with scanner checkpoints.
 - Verification: all 111 tests pass, as do formatter, linter, typecheck, local
-  Wrangler migrations and Worker dry-run. Live rollout validation is recorded
-  below after deployment.
+  Wrangler migrations and Worker dry-run.
+
+#### Production validation
+
+- Migration applied successfully and commit `0937940` deployed through Workers
+  Builds at 09:40 UTC (initial version
+  `b7a707c5-a4d1-4136-ae36-2987367bd562`, 100% traffic).
+- The live Arbitrum lifecycle test established activation block 507742818 and
+  verified signed observed deliveries at block 507742871. Webhook deletion while
+  subscribed cascaded successfully; repeated webhook and subscription deletes
+  returned HTTP 200. The endpoint remained readable as inactive, test/subscription
+  creation returned HTTP 409, and successful delivery history remained readable.
+- Test account/key/subscription/endpoint cleanup completed through the public and
+  operator APIs. Post-cleanup D1 checks found zero active/null boundaries, zero
+  mismatched or missing tracked-address references, zero live subscriptions to
+  inactive endpoints, and zero pending scanner commands.
+- All six chains continued advancing. A 45-second live tail captured 65 `ok`
+  invocations and no exceptions; one transient Arbitrum null-block response was
+  rejected by the existing strict RPC validation.
 
 ### 2026-09-22 — Bloom-gated, exact-hash log reads
 
