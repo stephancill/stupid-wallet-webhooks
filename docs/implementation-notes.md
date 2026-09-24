@@ -9,11 +9,13 @@ Milestone working notes for the Stupid Wallet Webhooks worker.
 
 ### 2026-09-24 — Scanner cost and CPU instrumentation
 
-- A new `SCANNER_METRICS` Analytics Engine binding writes one aggregate per
-  active chain at most once per minute, from in-memory counters. No D1 or
-  Durable Object storage writes are added per block. A DO eviction can discard
-  its unfinished minute, so compare the summed `scans` and `processedBlocks`
-  against platform aggregates before extrapolating.
+- A new `SCANNER_METRICS` Analytics Engine binding writes in-memory aggregates
+  at most once per minute on fast chains and once per scan on chains with a
+  block interval of at least five seconds. The latter can hibernate between
+  alarms (Ethereum had no points during the initial per-minute-only rollout).
+  No D1 or Durable Object storage writes are added per block. A DO eviction can
+  discard an unfinished fast-chain minute, so compare summed `scans` and
+  `processedBlocks` against platform aggregates before extrapolating.
 - Each point in `address_notifications_scanner_metrics` has `blob1 = v2`,
   `blob2 = chainId`, index `chainId`, and these ordered doubles:
 

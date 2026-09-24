@@ -62,6 +62,8 @@ export class ScannerShard {
   private operation: Promise<unknown> = Promise.resolve();
   private scanMetrics = emptyScannerMetrics();
   private metricsFlushAt = Date.now();
+  /** Sparse chains may hibernate between alarms; emit before their state is lost. */
+  private metricsFlushEachScan = false;
 
   constructor(state: DurableObjectState, env: Env) {
     this.state = state;
@@ -161,7 +163,7 @@ export class ScannerShard {
     try {
       await this.scanChainPass(chainId);
     } finally {
-      if (Date.now() - this.metricsFlushAt >= 60_000) {
+      if (this.metricsFlushEachScan || Date.now() - this.metricsFlushAt >= 60_000) {
         writeScannerMetrics({
           dataset: this.env.SCANNER_METRICS,
           chainId,
@@ -207,6 +209,7 @@ export class ScannerShard {
     this.pendingHead = Number(head);
 
     const chain = await getChainRegistry(this.db, chainId);
+    this.metricsFlushEachScan = (chain?.block_speed_ms ?? 0) >= 5_000;
     if (chain?.status === "paused") {
       await this.schedule(30_000);
       return;

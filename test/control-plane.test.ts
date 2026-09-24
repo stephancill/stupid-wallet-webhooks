@@ -42,6 +42,7 @@ function setup({ cursor = 80 }: { cursor?: number | null } = {}) {
   let unavailable = false;
   let beforeHead: (() => Promise<void>) | undefined;
   const calls: string[] = [];
+  const metrics: unknown[] = [];
   const storage = new Map<string, unknown>();
   const env = {
     DB: db,
@@ -79,6 +80,11 @@ function setup({ cursor = 80 }: { cursor?: number | null } = {}) {
       },
     },
     MATCHED_ACTIVITY_QUEUE: { async sendBatch() {} },
+    SCANNER_METRICS: {
+      writeDataPoint(point: unknown) {
+        metrics.push(point);
+      },
+    },
   } as unknown as Env;
   const scanner = new ScannerShard(
     {
@@ -148,6 +154,7 @@ function setup({ cursor = 80 }: { cursor?: number | null } = {}) {
     subscribe,
     apply,
     calls,
+    metrics,
     dispatched,
     app,
     setHead(value: number) {
@@ -190,6 +197,7 @@ describe("subscription activation boundaries", () => {
     release();
     await Promise.all([first, second, alarm]);
     expect(s.calls).toEqual(["eth_blockNumber", "eth_blockNumber"]);
+    expect(s.metrics).toHaveLength(1); // A slow chain emits before its DO can hibernate.
     expect(
       (await getSubscriptionById({ db: s.db, subscriptionId: "sub" }))?.active_from_block,
     ).toBe(101);
