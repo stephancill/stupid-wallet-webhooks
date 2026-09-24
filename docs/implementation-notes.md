@@ -55,6 +55,12 @@ Milestone working notes for the Stupid Wallet Webhooks worker.
   GROUP BY chain_id
   ```
 
+The first live six-chain counters and trace sample are recorded in the
+[post-change impact report](baselines/2026-09-24-post-change-impact.md). They
+confirmed 40 log queries for 404 fetched blocks (90.1% avoided), with 34
+log-batch requests for those 40 queries. The sparse-chain flush recovered
+Ethereum coverage after the initial per-minute-only rollout omitted it.
+
 ### 2026-09-24 — Post-change impact measurement
 
 Measured the day starting 24 hours after the last functional deploy, against the

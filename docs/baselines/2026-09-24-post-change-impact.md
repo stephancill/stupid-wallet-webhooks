@@ -1,6 +1,7 @@
 # Post-change impact — bloom-gated scanner reads
 
-Measured **2026-09-24**, ~31 hours after the last functional deploy. Compares
+Initial baseline measured **2026-09-24 through 09:45 UTC**, ~31 hours after
+the last functional deploy. Compares
 matched 24-hour windows before and after the change, plus a direct
 mechanism measurement of the bloom gate.
 
@@ -15,8 +16,9 @@ Two commits, deployed 2026-09-22:
 | `50241ca` | 09:10:33       | Bloom-gated, exact-hash log reads + strict RPC validation |
 | `0937940` | 09:40:39       | Activation boundaries + atomic webhook deactivation       |
 
-Only documentation was deployed after that (09:46). **No other functional deploy
-occurred**, so the before/after comparison is attributable to these changes.
+Only documentation was deployed through the initial comparison (09:46).
+**No other functional deploy occurred in those measurement windows**, so the
+before/after comparison covers these changes.
 
 ## Measurement windows
 
@@ -194,22 +196,54 @@ the other five chains produced none.
 
 ## 6. Recommended next steps
 
-1. **Coalesce log reads across a scan pass.** Today each range that has a
-   positive block issues its own log batch. Accumulating positive blocks across
-   the whole pass (up to the existing 100-block bound) and issuing one gated log
-   batch would keep the 69.4% CU saving while removing most of the +24.8% batch
-   regression, especially on Ethereum and Base.
-2. **Make the gate adaptive per chain.** Where positivity is high (Ethereum, Base),
-   an inline block+logs request costs the same CU as gating but half the requests.
-   Decide from observed positivity rather than a hardcoded provider rule.
-3. **Instrument the scanner.** Record blocks scanned, bloom-negative blocks, log
-   queries issued, receipts, validation failures and fallbacks per chain. Today
-   only whole-batch counts exist, which is why this report needed an external
-   replay.
+1. **Keep exact-hash reads while reducing the extra gateway hop.** A
+   scanner-specific bound gateway operation could fetch blocks, bloom-check
+   them, and fetch positive logs by block hash behind one service-bound call.
+   Combining height-based block and log queries in one batch would sacrifice
+   the consistency requirement.
+2. **Profile CPU with representative chain blocks locally.** Production timers
+   freeze within synchronous JavaScript; use the local workerd profiler to
+   locate the CPU cost before altering validation or matching.
+3. **Continue scanner instrumentation.** Per-chain block, bloom, log, retry and
+   receipt counts now exist. Add validated-response failures and provider-level
+   fallback attempts to distinguish scanner retries from upstream work.
 4. **Resolve the Gnosis `degraded` flap** and clear stale status on successful
    scans so the alert reflects reality.
 5. **Re-measure against Alchemy once its cap is lifted**, since that is the only
    direct confirmation of the CU saving.
+
+### Live scanner-counter follow-up (2026-09-24)
+
+Scanner Analytics Engine counters were deployed later that day. An initial
+six-chain window beginning at 10:49:45 UTC recorded **404 fetched blocks**, of
+which **40 were bloom-positive and queried for logs** (90.1% avoided). These
+reads returned 16,041 Transfer logs; the scanner inspected 20,543 transactions.
+Forty logical log RPC items required **34 separate log-batch requests**, alongside
+154 block-batch requests. There were two failed block/log batch attempts. The
+short sample is consistent with the independent 400-header measurement above;
+it is not a daily savings estimate. The 20-CU block / 60-CU log counterfactual
+for these fetched blocks is 32,320 CU without gating versus 10,480 CU with
+gating (67.6% less), excluding heads, receipts, retries and provider routing.
+
+| Chain | Fetched blocks | Log queries | Log batch requests |
+| ----- | -------------: | ----------: | -----------------: |
+| 1     |              8 |           5 |                  4 |
+| 10    |             33 |           1 |                  1 |
+| 100   |             31 |           0 |                  0 |
+| 137   |             43 |           7 |                  7 |
+| 8453  |             33 |          27 |                 22 |
+| 42161 |            256 |           0 |                  0 |
+
+Log queries are already mostly one per batch on settled chains. Merging ranges
+within a scan pass cannot eliminate most extra gateway requests when each pass
+has only one small range. This is why step 1 targets the gateway hop itself.
+
+A separate three-minute Worker tail recorded 352 scanner invocations, 351 `ok`,
+one `canceled`, and no exceptions. Base used 1,321 of the 3,421 sampled CPU
+milliseconds (39%) at 18.1 ms/invocation; Ethereum averaged 23.7 ms/invocation
+but ran only 14 times. This identifies CPU-heavy chains, not the exact function
+or a causal estimate of the rollout's CPU change. Production timers freeze during
+synchronous JavaScript; use a local workerd CPU profile for function attribution.
 
 ## Reproduction
 
