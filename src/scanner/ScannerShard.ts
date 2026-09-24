@@ -29,6 +29,7 @@ import { isRpcReadError } from "../rpc/schema";
 import { classifyChain, pushWindow, pruneTo, type HeldBlock } from "../domain/reorg";
 import { planRevertedDeliveries } from "../queues/plan";
 import { enqueueMatched } from "./queue";
+import { emptyScannerMetrics, writeScannerMetrics } from "./metrics";
 import type { DeliveryHook, Env } from "../env";
 
 const MAX_POLL_INTERVAL_MS = 30_000;
@@ -59,6 +60,8 @@ export class ScannerShard {
   private blockFailures: { block: bigint; count: number } | null = null;
   /** RPC awaits must not let an alarm scan past a subscription being activated. */
   private operation: Promise<unknown> = Promise.resolve();
+  private scanMetrics = emptyScannerMetrics();
+  private metricsFlushAt = Date.now();
 
   constructor(state: DurableObjectState, env: Env) {
     this.state = state;
@@ -154,6 +157,23 @@ export class ScannerShard {
   // -------------------------------------------------------------------------
 
   private async scanChain(chainId: number): Promise<void> {
+    this.scanMetrics.scans += 1;
+    try {
+      await this.scanChainPass(chainId);
+    } finally {
+      if (Date.now() - this.metricsFlushAt >= 60_000) {
+        writeScannerMetrics({
+          dataset: this.env.SCANNER_METRICS,
+          chainId,
+          metrics: this.scanMetrics,
+        });
+        this.scanMetrics = emptyScannerMetrics();
+        this.metricsFlushAt = Date.now();
+      }
+    }
+  }
+
+  private async scanChainPass(chainId: number): Promise<void> {
     // Use rpc-racer's private path (bypasses the public rate limit) when we have
     // the shared secret configured; otherwise fall back to the public feed.
     const secret = this.env.RPC_INTERNAL_SECRET?.trim();
@@ -171,7 +191,9 @@ export class ScannerShard {
       return;
     }
     const trackedSet = new Set(tracked) as Set<`0x${string}`>;
+    const filterStart = performance.now();
     const transferBloom = createTransferBloomFilter({ trackedAddresses: trackedSet });
+    this.scanMetrics.filterBuildMs += performance.now() - filterStart;
 
     let head: bigint;
     try {
@@ -272,6 +294,7 @@ export class ScannerShard {
           fromBlock: from,
           toBlock: to,
           transferBloom,
+          metrics: this.scanMetrics,
         });
       } catch (error) {
         console.error(
@@ -304,6 +327,7 @@ export class ScannerShard {
             chainId,
             blockNumber,
             transferBloom,
+            metrics: this.scanMetrics,
           }));
         } catch (error) {
           console.error(
@@ -321,6 +345,7 @@ export class ScannerShard {
       if (verdict.kind === "ok") {
         try {
           await this.processBlock({ chainId, block, logs, trackedSet });
+          this.scanMetrics.processedBlocks += 1;
         } catch (error) {
           console.error(`scan error on chain ${chainId} block ${blockNumber}`, error);
           if (!isRpcReadError(error) && (await this.registerBlockFailure(chainId, blockNumber)))
@@ -539,7 +564,10 @@ export class ScannerShard {
   }): Promise<void> {
     // Logs are either fetched by exact hash or proven irrelevant by the block
     // bloom. Receipts below only run for tracked transaction/address matches.
+    const matchStart = performance.now();
     const analyzed = analyzeBlock({ block, logs, tracked: trackedSet });
+    this.scanMetrics.matchMs += performance.now() - matchStart;
+    this.scanMetrics.receiptItems += new Set(analyzed.receiptHashes).size;
 
     const receipts = await ethGetTransactionReceipts({
       baseUrl: this.env.RPC_RACER_BASE_URL,

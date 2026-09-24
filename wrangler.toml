@@ -24,6 +24,10 @@ database_id = "abb46259-a808-4350-bc3c-cbd8201f85ef"
 binding = "RPC_RACER"
 service = "rpc-racer"
 
+[[analytics_engine_datasets]]
+binding = "SCANNER_METRICS"
+dataset = "address_notifications_scanner_metrics"
+
 [[durable_objects.bindings]]
 name = "SCANNER_SHARD_1"
 class_name = "ScannerShard"

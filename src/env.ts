@@ -11,6 +11,7 @@ export type Env = {
   RPC_RACER_BASE_URL: string;
   /** rpc-racer worker service binding (no extra request fees vs. public HTTP). */
   RPC_RACER?: Fetcher;
+  SCANNER_METRICS: AnalyticsEngineDataset;
   RPC_INTERNAL_SECRET?: string;
   RPC_SCANNER_FANOUT?: string;
   SCANNER_SHARD_COUNT: string;

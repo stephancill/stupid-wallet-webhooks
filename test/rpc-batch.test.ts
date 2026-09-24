@@ -10,6 +10,7 @@ import {
 } from "../src/rpc/client";
 import { TRANSFER_TOPIC, analyzeBlock, finalizeBundles } from "../src/domain/activity";
 import { createTransferBloomFilter } from "../src/domain/bloom";
+import { emptyScannerMetrics } from "../src/scanner/metrics";
 import fixture from "./fixtures/arbitrum-bloom.json";
 import type { Hex } from "viem";
 
@@ -49,6 +50,7 @@ function success({ id, result }: { id: number; result: unknown }) {
 
 describe("bloom-gated block/log reads", () => {
   it("reads blocks first, fetches only bloom-positive logs by hash, and tolerates response ordering", async () => {
+    const metrics = emptyScannerMetrics();
     setInternalRpc({ secret: "s3cr3t", fanout: 3 });
     const sent = installRpc({
       respond: (requests, call) => {
@@ -82,6 +84,7 @@ describe("bloom-gated block/log reads", () => {
       ...config,
       fromBlock: blockNumber,
       toBlock: blockNumber + 1n,
+      metrics,
     });
     expect(sent).toHaveLength(2);
     expect(sent.every((call) => call.url.includes("/internal/v1/42161?fanoutCount=3"))).toBe(true);
@@ -90,9 +93,23 @@ describe("bloom-gated block/log reads", () => {
     expect(results[0].block.logsBloom).toBe(fixture.block.logsBloom as Hex);
     expect(results[0].logs).toHaveLength(1);
     expect(results[1].logs).toEqual([]);
+    expect(metrics).toMatchObject({
+      blockItems: 2,
+      bloomPositiveBlocks: 1,
+      logItems: 1,
+      transferLogs: 1,
+      blockBatches: 1,
+      logBatches: 1,
+      blockAttempts: 1,
+      logAttempts: 1,
+      blockAttemptedItems: 2,
+      logAttemptedItems: 1,
+      failedAttempts: 0,
+    });
   });
 
   it("skips all log RPCs for negative blooms while preserving sender and incoming native activity", async () => {
+    const metrics = emptyScannerMetrics();
     const txHash = fixture.logs[0].transactionHash as Hex;
     const sent = installRpc({
       respond: () => [
@@ -115,9 +132,19 @@ describe("bloom-gated block/log reads", () => {
         }),
       ],
     });
-    const result = await fetchBlockAndLogs({ ...config, blockNumber });
+    const result = await fetchBlockAndLogs({ ...config, blockNumber, metrics });
     expect(sent).toHaveLength(1);
     expect(result.logs).toEqual([]);
+    expect(metrics).toMatchObject({
+      blockItems: 1,
+      bloomPositiveBlocks: 0,
+      logItems: 0,
+      transactions: 1,
+      blockAttempts: 1,
+      logAttempts: 0,
+      blockAttemptedItems: 1,
+      logAttemptedItems: 0,
+    });
     const analyzed = analyzeBlock({ ...result, tracked: new Set([tracked, other]) });
     const observations = await finalizeBundles({
       chainId: 42161,
@@ -149,6 +176,7 @@ describe("bloom-gated block/log reads", () => {
   });
 
   it("keeps already-fetched blocks while retrying failed log reads", async () => {
+    const metrics = emptyScannerMetrics();
     const sent = installRpc({
       respond: (_requests, call) => {
         if (call === 1) return [success({ id: 1, result: rawBlock })];
@@ -159,13 +187,23 @@ describe("bloom-gated block/log reads", () => {
         return [success({ id: 1, result: [fixture.logs[0]] })];
       },
     });
-    const result = await fetchBlockAndLogs({ ...config, blockNumber });
+    const result = await fetchBlockAndLogs({ ...config, blockNumber, metrics });
     expect(result.logs).toHaveLength(1);
     expect(sent.map((call) => call.requests[0].method)).toEqual([
       "eth_getBlockByNumber",
       "eth_getLogs",
       "eth_getLogs",
     ]);
+    expect(metrics).toMatchObject({
+      blockItems: 1,
+      bloomPositiveBlocks: 1,
+      logItems: 1,
+      blockAttempts: 1,
+      logAttempts: 2,
+      blockAttemptedItems: 1,
+      logAttemptedItems: 2,
+      failedAttempts: 1,
+    });
   });
 
   for (const [name, result] of [

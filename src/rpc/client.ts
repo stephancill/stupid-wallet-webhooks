@@ -7,6 +7,7 @@
 import { TRANSFER_TOPIC } from "../domain/activity";
 import type { NormalizedLog, NormalizedTx, NormalizedBlock, Receipt } from "../domain/activity";
 import { mayContainTrackedTransfer, type TransferBloomFilter } from "../domain/bloom";
+import type { ScannerMetrics } from "../scanner/metrics";
 import {
   isRpcReadError,
   parseRpcData,
@@ -221,17 +222,30 @@ export async function jsonRpcBatch({
   chainId,
   requests,
   signal,
+  metrics,
+  stage,
 }: {
   baseUrl: string;
   chainId: number | string;
   requests: JsonRpcBatchItem[];
   signal?: AbortSignal;
+  metrics?: ScannerMetrics;
+  stage?: "block" | "log";
 }): Promise<JsonRpcBatchResponseItem[]> {
   if (requests.length === 0) return [];
   const expectedIds = new Set(requests.map((request) => request.id));
   if (expectedIds.size !== requests.length) throw new Error("Duplicate RPC request ids");
   let lastError: unknown;
   for (let attempt = 0; attempt < RETRIES; attempt += 1) {
+    if (metrics && stage) {
+      if (stage === "block") {
+        metrics.blockAttempts += 1;
+        metrics.blockAttemptedItems += requests.length;
+      } else {
+        metrics.logAttempts += 1;
+        metrics.logAttemptedItems += requests.length;
+      }
+    }
     const controller = new AbortController();
     const parent = signal;
     const onAbort = () => controller.abort("aborted");
@@ -279,6 +293,7 @@ export async function jsonRpcBatch({
         throw rpcReadError({ message: "Missing RPC batch responses" });
       return requests.map((request) => byId.get(request.id)!);
     } catch (error) {
+      if (metrics && stage) metrics.failedAttempts += 1;
       lastError = error;
       if (parent?.aborted) throw error;
       if (error instanceof Error && error.message === "aborted") throw error;
@@ -304,12 +319,14 @@ export async function fetchBlockAndLogs({
   chainId,
   blockNumber,
   transferBloom,
+  metrics,
   signal,
 }: {
   baseUrl: string;
   chainId: number;
   blockNumber: bigint;
   transferBloom: TransferBloomFilter;
+  metrics?: ScannerMetrics;
   signal?: AbortSignal;
 }): Promise<{ block: NormalizedBlock; logs: NormalizedLog[] }> {
   const [result] = await fetchBlocksAndLogsByRange({
@@ -318,6 +335,7 @@ export async function fetchBlockAndLogs({
     fromBlock: blockNumber,
     toBlock: blockNumber,
     transferBloom,
+    metrics,
     signal,
   });
   return result;
@@ -338,6 +356,7 @@ export async function fetchBlocksAndLogsByRange({
   fromBlock,
   toBlock,
   transferBloom,
+  metrics,
   signal,
 }: {
   baseUrl: string;
@@ -345,6 +364,7 @@ export async function fetchBlocksAndLogsByRange({
   fromBlock: bigint;
   toBlock: bigint;
   transferBloom: TransferBloomFilter;
+  metrics?: ScannerMetrics;
   signal?: AbortSignal;
 }): Promise<BlockAndLogs[]> {
   const count = Number(toBlock - fromBlock) + 1;
@@ -356,19 +376,37 @@ export async function fetchBlocksAndLogsByRange({
     requests.push({ id: index + 1, method: "eth_getBlockByNumber", params: [hex, true] });
   }
 
+  if (metrics) metrics.blockBatches += 1;
   const responses = await jsonRpcBatch({
     baseUrl,
     chainId,
     requests,
+    metrics,
+    stage: "block",
     signal,
   });
+  const parseStart = performance.now();
   const out: BlockAndLogs[] = responses.map((response, index) => ({
     block: normalizeBlock({ raw: response.result, blockNumber: fromBlock + BigInt(index) }),
     logs: [],
   }));
+  if (metrics) {
+    metrics.blockItems += out.length;
+    metrics.transactions += out.reduce((sum, item) => sum + item.block.transactions.length, 0);
+    metrics.blockParseMs += performance.now() - parseStart;
+  }
+  const bloomStart = performance.now();
   const candidates = out.filter(({ block }) =>
     mayContainTrackedTransfer({ logsBloom: block.logsBloom, filter: transferBloom }),
   );
+  if (metrics) {
+    metrics.bloomPositiveBlocks += candidates.length;
+    metrics.bloomCheckMs += performance.now() - bloomStart;
+  }
+  if (candidates.length > 0 && metrics) {
+    metrics.logBatches += 1;
+    metrics.logItems += candidates.length;
+  }
   const logResponses = await jsonRpcBatch({
     baseUrl,
     chainId,
@@ -377,14 +415,19 @@ export async function fetchBlocksAndLogsByRange({
       method: "eth_getLogs",
       params: [{ blockHash: block.hash, topics: [TRANSFER_TOPIC] }],
     })),
+    metrics,
+    stage: "log",
     signal,
   });
+  const logParseStart = performance.now();
   for (let index = 0; index < candidates.length; index += 1) {
     candidates[index].logs = normalizeLogs({
       raw: logResponses[index].result,
       blockHash: candidates[index].block.hash,
     });
+    if (metrics) metrics.transferLogs += candidates[index].logs.length;
   }
+  if (metrics) metrics.logParseMs += performance.now() - logParseStart;
   return out;
 }
 

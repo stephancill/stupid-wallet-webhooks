@@ -7,6 +7,52 @@ Milestone working notes for the Stupid Wallet Webhooks worker.
 
 ## Milestone 5 — Production deployment & pilot (in progress)
 
+### 2026-09-24 — Scanner cost and CPU instrumentation
+
+- A new `SCANNER_METRICS` Analytics Engine binding writes one aggregate per
+  active chain at most once per minute, from in-memory counters. No D1 or
+  Durable Object storage writes are added per block. A DO eviction can discard
+  its unfinished minute, so compare the summed `scans` and `processedBlocks`
+  against platform aggregates before extrapolating.
+- Each point in `address_notifications_scanner_metrics` has `blob1 = v1`,
+  `blob2 = chainId`, index `chainId`, and these ordered doubles:
+  1. scans; 2. processed blocks; 3. successfully fetched block items;
+  2. bloom-positive blocks; 5. requested log items; 6. returned Transfer logs;
+  3. transactions inspected; 8. requested receipt items;
+  4. block batch calls; 10. log batch calls; 11. block HTTP attempts;
+  5. log HTTP attempts; 13. failed block/log HTTP attempts;
+  6. bloom-filter construction ms; 15. block parsing ms;
+  7. bloom membership checks ms; 17. log parsing ms;
+  8. synchronous activity matching ms; 19. attempted block RPC items;
+  9. attempted log RPC items.
+- Counts include retries and prefetch work where applicable: `blockItems` and
+  `bloomPositiveBlocks` count successfully decoded prefetched blocks, while
+  `processedBlocks` counts accepted canonical blocks. `logItems` counts logical
+  queries before retries; `double19` and `double20` include retry attempts at
+  the scanner-to-gateway boundary (not upstream race fanout or gateway-internal
+  retries). Timings use `performance.now()` **wall time**, not billed CPU. Compare
+  the parser/matcher timings with platform-reported DO CPU for attribution,
+  rather than equating them.
+- Query through the Analytics Engine SQL API, applying its sample interval:
+
+  ```sql
+  SELECT blob2 AS chain_id,
+         sum(double1 * _sample_interval) AS scans,
+         sum(double2 * _sample_interval) AS processed_blocks,
+         sum(double3 * _sample_interval) AS fetched_blocks,
+         sum(double4 * _sample_interval) AS bloom_positive_blocks,
+         sum(double5 * _sample_interval) AS log_queries,
+         sum(double19 * _sample_interval) AS attempted_block_items,
+         sum(double20 * _sample_interval) AS attempted_log_items,
+         sum(double15 * _sample_interval) AS block_parse_ms,
+         sum(double17 * _sample_interval) AS log_parse_ms,
+         sum(double18 * _sample_interval) AS match_ms
+  FROM address_notifications_scanner_metrics
+  WHERE timestamp >= toDateTime('<UTC start>')
+    AND timestamp < toDateTime('<UTC end>') AND blob1 = 'v1'
+  GROUP BY chain_id
+  ```
+
 ### 2026-09-24 — Post-change impact measurement
 
 Measured the day starting 24 hours after the last functional deploy, against the
