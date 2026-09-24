@@ -167,6 +167,8 @@ export class ScannerShard {
           chainId,
           metrics: this.scanMetrics,
         });
+        // Tail trace events include CPU time and DO id; this maps that id to a chain.
+        console.log(`scanner metrics chain ${chainId}`);
         this.scanMetrics = emptyScannerMetrics();
         this.metricsFlushAt = Date.now();
       }
@@ -191,9 +193,7 @@ export class ScannerShard {
       return;
     }
     const trackedSet = new Set(tracked) as Set<`0x${string}`>;
-    const filterStart = performance.now();
     const transferBloom = createTransferBloomFilter({ trackedAddresses: trackedSet });
-    this.scanMetrics.filterBuildMs += performance.now() - filterStart;
 
     let head: bigint;
     try {
@@ -564,9 +564,7 @@ export class ScannerShard {
   }): Promise<void> {
     // Logs are either fetched by exact hash or proven irrelevant by the block
     // bloom. Receipts below only run for tracked transaction/address matches.
-    const matchStart = performance.now();
     const analyzed = analyzeBlock({ block, logs, tracked: trackedSet });
-    this.scanMetrics.matchMs += performance.now() - matchStart;
     this.scanMetrics.receiptItems += new Set(analyzed.receiptHashes).size;
 
     const receipts = await ethGetTransactionReceipts({

@@ -13,11 +13,6 @@ export type ScannerMetrics = {
   blockAttempts: number;
   logAttempts: number;
   failedAttempts: number;
-  filterBuildMs: number;
-  blockParseMs: number;
-  bloomCheckMs: number;
-  logParseMs: number;
-  matchMs: number;
   blockAttemptedItems: number;
   logAttemptedItems: number;
 };
@@ -37,11 +32,6 @@ export function emptyScannerMetrics(): ScannerMetrics {
     blockAttempts: 0,
     logAttempts: 0,
     failedAttempts: 0,
-    filterBuildMs: 0,
-    blockParseMs: 0,
-    bloomCheckMs: 0,
-    logParseMs: 0,
-    matchMs: 0,
     blockAttemptedItems: 0,
     logAttemptedItems: 0,
   };
@@ -58,7 +48,7 @@ export function writeScannerMetrics({
   metrics: ScannerMetrics;
 }): void {
   dataset.writeDataPoint({
-    blobs: ["v1", String(chainId)],
+    blobs: ["v2", String(chainId)],
     indexes: [String(chainId)],
     doubles: [
       metrics.scans,
@@ -74,11 +64,6 @@ export function writeScannerMetrics({
       metrics.blockAttempts,
       metrics.logAttempts,
       metrics.failedAttempts,
-      metrics.filterBuildMs,
-      metrics.blockParseMs,
-      metrics.bloomCheckMs,
-      metrics.logParseMs,
-      metrics.matchMs,
       metrics.blockAttemptedItems,
       metrics.logAttemptedItems,
     ],

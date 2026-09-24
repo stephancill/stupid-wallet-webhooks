@@ -385,7 +385,6 @@ export async function fetchBlocksAndLogsByRange({
     stage: "block",
     signal,
   });
-  const parseStart = performance.now();
   const out: BlockAndLogs[] = responses.map((response, index) => ({
     block: normalizeBlock({ raw: response.result, blockNumber: fromBlock + BigInt(index) }),
     logs: [],
@@ -393,15 +392,12 @@ export async function fetchBlocksAndLogsByRange({
   if (metrics) {
     metrics.blockItems += out.length;
     metrics.transactions += out.reduce((sum, item) => sum + item.block.transactions.length, 0);
-    metrics.blockParseMs += performance.now() - parseStart;
   }
-  const bloomStart = performance.now();
   const candidates = out.filter(({ block }) =>
     mayContainTrackedTransfer({ logsBloom: block.logsBloom, filter: transferBloom }),
   );
   if (metrics) {
     metrics.bloomPositiveBlocks += candidates.length;
-    metrics.bloomCheckMs += performance.now() - bloomStart;
   }
   if (candidates.length > 0 && metrics) {
     metrics.logBatches += 1;
@@ -419,7 +415,6 @@ export async function fetchBlocksAndLogsByRange({
     stage: "log",
     signal,
   });
-  const logParseStart = performance.now();
   for (let index = 0; index < candidates.length; index += 1) {
     candidates[index].logs = normalizeLogs({
       raw: logResponses[index].result,
@@ -427,7 +422,6 @@ export async function fetchBlocksAndLogsByRange({
     });
     if (metrics) metrics.transferLogs += candidates[index].logs.length;
   }
-  if (metrics) metrics.logParseMs += performance.now() - logParseStart;
   return out;
 }
 
