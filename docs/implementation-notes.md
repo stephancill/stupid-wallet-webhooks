@@ -7,6 +7,39 @@ Milestone working notes for the Stupid Wallet Webhooks worker.
 
 ## Milestone 5 — Production deployment & pilot (in progress)
 
+### 2026-09-24 — Post-change impact measurement
+
+Measured the day starting 24 hours after the last functional deploy, against the
+pre-change day: [post-change impact](baselines/2026-09-24-post-change-impact.md).
+
+- Direct replay of 400 recent headers per chain against the production tracked
+  set shows **92.6% of per-block `eth_getLogs` calls avoided** and a **69.4%
+  reduction in block+log compute** (weighted by real block volume), with **no
+  bloom false negatives** across 240 negative-control probes. Ethereum (77.5%
+  positive) and Base (56.3% positive) benefit least.
+- Internal gateway requests rose **14.9%** and batches **24.8%**, concentrated on
+  exactly those two dense chains, because a positive block now needs a second
+  request. Arbitrum errors fell 62% (10-item ranges are rejected less often), but
+  errors roughly doubled on the other five chains.
+- Scanner Durable Object CPU rose **62%** while billed duration fell **25%**;
+  rpc-racer CPU rose 34.6% against 7.8% public-traffic growth.
+- The Alchemy billing saving remains unverified: the account cap was reached on
+  2026-09-22 and no fallbacks have been served since, so the 69.4% figure is a
+  mechanism estimate. Recommended follow-ups: coalesce log reads across a scan
+  pass, make the gate adaptive per chain, instrument scanner counters, and
+  resolve the recurring Gnosis `degraded` flap.
+
+Read-only; no code or configuration changed in this measurement.
+
+### 2026-09-22 — Production baseline capture
+
+Read-only baseline: [24-hour production report](baselines/2026-09-22-production.md),
+ending at 09:45 UTC, with matched 30-minute windows around the bloom deployment.
+Includes weighted internal RPC traffic, Cloudflare D1/DO usage, delivery latency
+excluding this rollout's temporary test accounts, historical exception counts and
+current scanner health. Exact per-method batch-item counts and bloom-avoidance
+counters are not yet instrumented; the report makes no billing-savings claim.
+
 ### 2026-09-22 — Explicit activation boundaries and atomic webhook deactivation
 
 - Subscription activation now reads a real RPC head even on already-running
